@@ -9,9 +9,12 @@ import WalletBar from "./components/WalletBar";
 import CoinFlip from "./components/CoinFlip";
 import BetPanel from "./components/BetPanel";
 import FairnessPanel from "./components/FairnessPanel";
+import LiveFeed, { type FeedFlip } from "./components/LiveFeed";
 
 // Display symbol for the SPL token — rename to your launchpad token's ticker.
 const TOKEN_SYMBOL = "$BABYK";
+// Stand-in player address shown for the user's own activity while in demo mode.
+const DEMO_PLAYER = "DemoPlayer1111111111111111111111111111111111";
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -75,6 +78,9 @@ export default function App() {
   const [coinResult, setCoinResult] = useState<"heads" | "tails" | null>(null);
   const [spinning, setSpinning] = useState(false);
   const [lastResult, setLastResult] = useState<{ won: boolean; label: string; payout: string } | null>(null);
+
+  // The user's own simulated flips, prepended into the Live Flips feed in demo mode.
+  const [ownFlips, setOwnFlips] = useState<FeedFlip[]>([]);
 
   // SOL is a live wager path once the program is deployed (the on-chain config
   // creates the SOL vault at init). Selectable in demo for UI work too.
@@ -167,10 +173,27 @@ export default function App() {
       setCoinResult(bit === 0 ? "heads" : "tails");
       setSpinning(false);
       setLastResult({ won, label: bit === 0 ? "heads" : "tails", payout: fmtBase(payout, effectiveDecimals) });
+
+      // Surface the player's own simulated flip at the top of the Live Flips feed.
+      setOwnFlips((prev) => [
+        ...prev,
+        {
+          player: DEMO_PLAYER,
+          nonce: prev.length,
+          choice,
+          asset,
+          amount: amountBase.toString(),
+          payout: payout.toString(),
+          won,
+          settleTx: null,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
       setClientSeed(randomSeed());
       setBusy(false);
     },
-    [effectiveCfg, effectiveDecimals]
+    [effectiveCfg, effectiveDecimals, asset]
   );
 
   // Real flip: place_bet (player signs) → backend settles → animate. (SPL token path.)
@@ -264,11 +287,18 @@ export default function App() {
           onFlip={onFlip}
         />
 
+        <LiveFeed
+          demo={demo}
+          tokenSymbol={TOKEN_SYMBOL}
+          tokenDecimals={demo ? DEMO_ASSETS.token.decimals : decimals}
+          ownFlips={ownFlips}
+        />
+
         <FairnessPanel
           commitment={commitmentForPanel}
           clientSeedHex={toHex(clientSeed)}
           nonce={nonce}
-          player={publicKey ? publicKey.toBase58() : demo ? "DemoPlayer1111111111111111111111111111111111" : null}
+          player={publicKey ? publicKey.toBase58() : demo ? DEMO_PLAYER : null}
           onRegenerate={() => setClientSeed(randomSeed())}
           busy={busy}
         />

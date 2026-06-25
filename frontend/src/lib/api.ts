@@ -56,3 +56,24 @@ export async function verifyBet(params: {
   if (!r.ok) throw new Error(data.error || "verification failed");
   return data as VerifyResult;
 }
+
+/** One settled bet from the public history mirror (only data already public on-chain). */
+export interface RecentBet {
+  player: string;
+  nonce: number;
+  choice: number; // 0 heads, 1 tails
+  asset: "token" | "sol";
+  amount: string; // base units
+  payout: string; // base units
+  won: boolean;
+  settleTx: string | null;
+  createdAt: string; // ISO timestamp
+}
+
+/** Latest settled bets, newest first, for the Live Flips feed. Errors propagate to the caller. */
+export async function getRecentBets(limit = 50, signal?: AbortSignal): Promise<RecentBet[]> {
+  const r = await fetch(`${BACKEND_URL}/api/bets/recent?limit=${limit}`, { signal });
+  if (!r.ok) throw new Error("failed to load recent bets");
+  const data = await r.json();
+  return (data.bets ?? []) as RecentBet[];
+}
