@@ -98,6 +98,65 @@ betsRouter.post("/settle", async (req, res) => {
   }
 });
 
+/**
+ * Public, read-only feed of the latest settled bets for the frontend "Live Flips"
+ * section. Exposes ONLY data that is already public on-chain — player pubkey,
+ * nonce, choice, asset, amount, payout, win/loss, settle tx, and time — and never
+ * the fairness seeds/hashes. Does not touch settlement; it only reads the history
+ * mirror written by /settle above.
+ *
+ * The frontend polls this every few seconds, so we keep a tiny (~2s) in-memory
+ * cache of the newest rows and serve slices of it. That collapses bursts of polls
+ * into at most one DB query per cache window, and the query itself is lean +
+ * projected. (A future SSE/WebSocket push could replace polling, but none exists
+ * today — polling is the no-new-infra choice.)
+ */
+const RECENT_DEFAULT = 50;
+const RECENT_MAX = 100;
+const RECENT_CACHE_MS = 2000;
+// Only public-on-chain fields; "-_id" drops Mongo's internal id from the payload.
+const RECENT_PROJECTION = "player nonce choice asset amount payout won settleTx createdAt -_id";
+
+interface RecentBet {
+  player: string;
+  nonce: number;
+  choice: number;
+  asset: string;
+  amount: string;
+  payout: string;
+  won: boolean;
+  settleTx: string | null;
+  createdAt: Date;
+}
+
+let recentCache: { at: number; data: RecentBet[] } | null = null;
+
+/** Newest settled bets (up to RECENT_MAX), cached briefly to absorb polling. */
+async function getRecentSettled(): Promise<RecentBet[]> {
+  const now = Date.now();
+  if (recentCache && now - recentCache.at < RECENT_CACHE_MS) return recentCache.data;
+  const docs = (await BetModel.find({ status: "settled" })
+    .sort({ createdAt: -1 })
+    .limit(RECENT_MAX)
+    .select(RECENT_PROJECTION)
+    .lean()) as unknown as RecentBet[];
+  recentCache = { at: now, data: docs };
+  return docs;
+}
+
+betsRouter.get("/recent", async (req, res) => {
+  try {
+    const raw = Number(req.query.limit);
+    const limit = Number.isFinite(raw)
+      ? Math.min(Math.max(Math.trunc(raw), 1), RECENT_MAX)
+      : RECENT_DEFAULT;
+    const all = await getRecentSettled();
+    res.json({ bets: all.slice(0, limit) });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /** Best-effort refund of an expired, unsettled bet (program enforces the expiry). */
 betsRouter.post("/refund", async (req, res) => {
   try {
