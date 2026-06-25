@@ -1,0 +1,36 @@
+# ── Secrets & keys — NEVER commit ───────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*-keypair.json
+*keypair*.json
+*wallet*.json
+id.json
+keys/
+secrets/
+
+# ── Dependencies ────────────────────────────────────────────
+node_modules/
+
+# ── Rust / Anchor build (also holds the program keypair) ────
+target/
+.anchor/
+test-ledger/
+**/*.rs.bk
+
+# ── Frontend build / cache ──────────────────────────────────
+dist/
+build/
+.vite/
+.cache/
+
+# ── Logs & OS / editor cruft ────────────────────────────────
+*.log
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
