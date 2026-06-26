@@ -37,6 +37,13 @@ export function betPda(player: PublicKey, nonce: bigint): PublicKey {
   )[0];
 }
 
+export function randomnessPda(player: PublicKey, nonce: bigint): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [enc("randomness"), configPda().toBuffer(), player.toBuffer(), nonceLe(nonce)].slice(0, 3),
+    PROGRAM_ID
+  )[0];
+}
+
 // --- Decoders ---
 // PlayerState: disc(8) player(32) config(32) nonce(u64 @72) bump(@80)
 export async function fetchPlayerNonce(connection: Connection, player: PublicKey): Promise<bigint> {
@@ -63,17 +70,17 @@ export async function fetchConfigView(connection: Connection): Promise<ConfigVie
   const info = await connection.getAccountInfo(configPda());
   if (!info) return null;
   const dv = new DataView(info.data.buffer, info.data.byteOffset);
-  const hashBytes = info.data.subarray(136, 168);
+  const hashBytes = info.data.subarray(200, 232);
   const hex = Array.from(hashBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
   return {
-    feeBps: dv.getUint16(176, true),
-    minBet: dv.getBigUint64(178, true),
-    maxBet: dv.getBigUint64(186, true),
-    seedEpoch: dv.getBigUint64(168, true),
+    feeBps: dv.getUint16(240, true),
+    minBet: dv.getBigUint64(242, true),
+    maxBet: dv.getBigUint64(250, true),
+    seedEpoch: dv.getBigUint64(232, true),
     currentSeedHashHex: hex,
-    paused: info.data[212] === 1,
-    solMinBet: dv.getBigUint64(285, true),
-    solMaxBet: dv.getBigUint64(293, true),
+    paused: info.data[276] === 1,
+    solMinBet: dv.getBigUint64(349, true),
+    solMaxBet: dv.getBigUint64(357, true),
   };
 }
 
@@ -94,6 +101,7 @@ export function buildPlaceBetIx(
     { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
     { pubkey: vaultPda(cfg), isSigner: false, isWritable: true },
     { pubkey: getAssociatedTokenAddressSync(TOKEN_MINT, player), isSigner: false, isWritable: true },
+    { pubkey: randomnessPda(player, nonce), isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
@@ -123,6 +131,7 @@ export function buildPlaceBetSolIx(
     { pubkey: playerStatePda(cfg, player), isSigner: false, isWritable: true },
     { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
     { pubkey: solVaultPda(cfg), isSigner: false, isWritable: true },
+    { pubkey: randomnessPda(player, nonce), isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
 
