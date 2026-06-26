@@ -69,6 +69,9 @@ export interface DecodedBet {
   seedHashHex: string;
   seedEpoch: bigint;
   placedSlot: bigint;
+  commitSlot: bigint;
+  settlementDeadlineSlot: bigint;
+  randomnessAccount: PublicKey;
   bump: number;
 }
 
@@ -88,7 +91,10 @@ export function decodeBet(data: Buffer): DecodedBet {
     seedHashHex: data.subarray(130, 162).toString("hex"),
     seedEpoch: data.readBigUInt64LE(162),
     placedSlot: data.readBigUInt64LE(170),
-    bump: data.readUInt8(178),
+    commitSlot: data.readBigUInt64LE(178),
+    settlementDeadlineSlot: data.readBigUInt64LE(186),
+    randomnessAccount: new PublicKey(data.subarray(194, 226)),
+    bump: data.readUInt8(226),
   };
 }
 
@@ -111,18 +117,18 @@ export interface DecodedConfig {
 export function decodeConfig(data: Buffer): DecodedConfig {
   return {
     admin: new PublicKey(data.subarray(8, 40)),
-    settleAuthority: new PublicKey(data.subarray(40, 72)),
-    tokenMint: new PublicKey(data.subarray(72, 104)),
-    treasuryVault: new PublicKey(data.subarray(104, 136)),
-    currentSeedHashHex: data.subarray(136, 168).toString("hex"),
-    seedEpoch: data.readBigUInt64LE(168),
-    feeBps: data.readUInt16LE(176),
-    outstandingLiability: readU128LE(data, 196),
-    paused: data.readUInt8(212) === 1,
-    solVault: new PublicKey(data.subarray(253, 285)),
-    solMinBet: data.readBigUInt64LE(285),
-    solMaxBet: data.readBigUInt64LE(293),
-    outstandingLiabilitySol: readU128LE(data, 301),
+    settleAuthority: new PublicKey(data.subarray(72, 104)),
+    tokenMint: new PublicKey(data.subarray(136, 168)),
+    treasuryVault: new PublicKey(data.subarray(168, 200)),
+    currentSeedHashHex: data.subarray(200, 232).toString("hex"),
+    seedEpoch: data.readBigUInt64LE(232),
+    feeBps: data.readUInt16LE(240),
+    outstandingLiability: readU128LE(data, 260),
+    paused: data.readUInt8(276) === 1,
+    solVault: new PublicKey(data.subarray(317, 349)),
+    solMinBet: data.readBigUInt64LE(349),
+    solMaxBet: data.readBigUInt64LE(357),
+    outstandingLiabilitySol: readU128LE(data, 365),
   };
 }
 
@@ -139,7 +145,7 @@ export async function fetchConfig(): Promise<DecodedConfig | null> {
 }
 
 // --- Instruction builders (account order MUST match the Rust contexts) ---
-export function buildSettleIx(player: PublicKey, nonce: number | bigint, won: boolean): TransactionInstruction {
+export function buildSettleIx(player: PublicKey, nonce: number | bigint, randomnessAccount: PublicKey): TransactionInstruction {
   const cfg = configPda();
   const keys = [
     { pubkey: config.settleAuthority.publicKey, isSigner: true, isWritable: false },
@@ -148,13 +154,14 @@ export function buildSettleIx(player: PublicKey, nonce: number | bigint, won: bo
     { pubkey: player, isSigner: false, isWritable: true },
     { pubkey: vaultPda(cfg), isSigner: false, isWritable: true },
     { pubkey: getAssociatedTokenAddressSync(TOKEN_MINT, player), isSigner: false, isWritable: true },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
-  const data = Buffer.concat([ixDisc("settle_bet"), Buffer.from([won ? 1 : 0])]);
+  const data = ixDisc("settle_bet");
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
 }
 
-export function buildRefundIx(player: PublicKey, nonce: number | bigint): TransactionInstruction {
+export function buildRefundIx(player: PublicKey, nonce: number | bigint, randomnessAccount: PublicKey): TransactionInstruction {
   const cfg = configPda();
   const keys = [
     { pubkey: config.settleAuthority.publicKey, isSigner: true, isWritable: false }, // caller (pays fee)
@@ -163,12 +170,13 @@ export function buildRefundIx(player: PublicKey, nonce: number | bigint): Transa
     { pubkey: player, isSigner: false, isWritable: true },
     { pubkey: vaultPda(cfg), isSigner: false, isWritable: true },
     { pubkey: getAssociatedTokenAddressSync(TOKEN_MINT, player), isSigner: false, isWritable: true },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data: ixDisc("refund_expired_bet") });
 }
 
-export function buildSettleSolIx(player: PublicKey, nonce: number | bigint, won: boolean): TransactionInstruction {
+export function buildSettleSolIx(player: PublicKey, nonce: number | bigint, randomnessAccount: PublicKey): TransactionInstruction {
   const cfg = configPda();
   const keys = [
     { pubkey: config.settleAuthority.publicKey, isSigner: true, isWritable: false },
@@ -176,12 +184,13 @@ export function buildSettleSolIx(player: PublicKey, nonce: number | bigint, won:
     { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
     { pubkey: player, isSigner: false, isWritable: true },
     { pubkey: solVaultPda(cfg), isSigner: false, isWritable: true },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
   ];
-  const data = Buffer.concat([ixDisc("settle_bet_sol"), Buffer.from([won ? 1 : 0])]);
+  const data = ixDisc("settle_bet_sol");
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
 }
 
-export function buildRefundSolIx(player: PublicKey, nonce: number | bigint): TransactionInstruction {
+export function buildRefundSolIx(player: PublicKey, nonce: number | bigint, randomnessAccount: PublicKey): TransactionInstruction {
   const cfg = configPda();
   const keys = [
     { pubkey: config.settleAuthority.publicKey, isSigner: true, isWritable: false }, // caller (pays fee)
@@ -189,6 +198,7 @@ export function buildRefundSolIx(player: PublicKey, nonce: number | bigint): Tra
     { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
     { pubkey: player, isSigner: false, isWritable: true },
     { pubkey: solVaultPda(cfg), isSigner: false, isWritable: true },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
   ];
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data: ixDisc("refund_expired_bet_sol") });
 }

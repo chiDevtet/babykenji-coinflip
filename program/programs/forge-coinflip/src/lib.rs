@@ -20,6 +20,7 @@ const MAX_PAYOUT_BPS_CEILING: u16 = 2_500;
 /// the player. ~400ms/slot => ~1500 slots ≈ 10 minutes. Protects players from a
 /// backend that goes down and never settles.
 const BET_EXPIRY_SLOTS: u64 = 1_500;
+const RANDOMNESS_READY_DISCRIMINATOR: u8 = 1;
 
 const CHOICE_HEADS: u8 = 0;
 const CHOICE_TAILS: u8 = 1;
@@ -37,19 +38,30 @@ pub mod forge_coinflip {
     /// treasury token account (vault). `seed_hash` is sha256(server_seed) for the
     /// first fairness epoch; the backend publishes the matching hash and only
     /// reveals server_seed on rotation.
-    pub fn initialize_config(ctx: Context<InitializeConfig>, params: InitializeParams) -> Result<()> {
+    pub fn initialize_config(
+        ctx: Context<InitializeConfig>,
+        params: InitializeParams,
+    ) -> Result<()> {
         require!(params.fee_bps <= MAX_FEE_BPS, CoinflipError::FeeTooHigh);
         require!(
             params.max_payout_bps_of_treasury > 0
                 && params.max_payout_bps_of_treasury <= MAX_PAYOUT_BPS_CEILING,
             CoinflipError::InvalidPayoutCap
         );
-        require!(params.min_bet > 0 && params.min_bet <= params.max_bet, CoinflipError::InvalidBetLimits);
-        require!(params.sol_min_bet > 0 && params.sol_min_bet <= params.sol_max_bet, CoinflipError::InvalidBetLimits);
+        require!(
+            params.min_bet > 0 && params.min_bet <= params.max_bet,
+            CoinflipError::InvalidBetLimits
+        );
+        require!(
+            params.sol_min_bet > 0 && params.sol_min_bet <= params.sol_max_bet,
+            CoinflipError::InvalidBetLimits
+        );
 
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
         config.settle_authority = params.settle_authority;
+        config.pending_admin = Pubkey::default();
+        config.randomness_authority = params.randomness_authority;
         config.token_mint = ctx.accounts.mint.key();
         config.treasury_vault = ctx.accounts.treasury_vault.key();
         config.current_seed_hash = params.seed_hash;
@@ -84,22 +96,43 @@ pub mod forge_coinflip {
     /// Admin-only parameter updates. Pass `None` to leave a field unchanged.
     pub fn update_config(ctx: Context<UpdateConfig>, params: UpdateParams) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        if let Some(v) = params.settle_authority { config.settle_authority = v; }
+        if let Some(v) = params.settle_authority {
+            config.settle_authority = v;
+        }
         if let Some(v) = params.fee_bps {
             require!(v <= MAX_FEE_BPS, CoinflipError::FeeTooHigh);
             config.fee_bps = v;
         }
-        if let Some(v) = params.min_bet { config.min_bet = v; }
-        if let Some(v) = params.max_bet { config.max_bet = v; }
-        require!(config.min_bet > 0 && config.min_bet <= config.max_bet, CoinflipError::InvalidBetLimits);
-        if let Some(v) = params.sol_min_bet { config.sol_min_bet = v; }
-        if let Some(v) = params.sol_max_bet { config.sol_max_bet = v; }
-        require!(config.sol_min_bet > 0 && config.sol_min_bet <= config.sol_max_bet, CoinflipError::InvalidBetLimits);
+        if let Some(v) = params.min_bet {
+            config.min_bet = v;
+        }
+        if let Some(v) = params.max_bet {
+            config.max_bet = v;
+        }
+        require!(
+            config.min_bet > 0 && config.min_bet <= config.max_bet,
+            CoinflipError::InvalidBetLimits
+        );
+        if let Some(v) = params.sol_min_bet {
+            config.sol_min_bet = v;
+        }
+        if let Some(v) = params.sol_max_bet {
+            config.sol_max_bet = v;
+        }
+        require!(
+            config.sol_min_bet > 0 && config.sol_min_bet <= config.sol_max_bet,
+            CoinflipError::InvalidBetLimits
+        );
         if let Some(v) = params.max_payout_bps_of_treasury {
-            require!(v > 0 && v <= MAX_PAYOUT_BPS_CEILING, CoinflipError::InvalidPayoutCap);
+            require!(
+                v > 0 && v <= MAX_PAYOUT_BPS_CEILING,
+                CoinflipError::InvalidPayoutCap
+            );
             config.max_payout_bps_of_treasury = v;
         }
-        if let Some(v) = params.paused { config.paused = v; }
+        if let Some(v) = params.paused {
+            config.paused = v;
+        }
         Ok(())
     }
 
@@ -108,10 +141,76 @@ pub mod forge_coinflip {
     /// every result settled under it. Gated to the settle_authority (the backend
     /// operator). Hardening note: split this into a dedicated `seed_authority` or
     /// require `admin` if you want rotation isolated from the settling hot key.
+    pub fn create_randomness(
+        ctx: Context<CreateRandomness>,
+        random_bytes: [u8; 32],
+        ready: bool,
+    ) -> Result<()> {
+        let randomness = &mut ctx.accounts.randomness;
+        randomness.authority = ctx.accounts.randomness_authority.key();
+        randomness.random_bytes = random_bytes;
+        randomness.ready = ready;
+        randomness.bump = ctx.bumps.randomness;
+        Ok(())
+    }
+
+    pub fn reveal_randomness(ctx: Context<RevealRandomness>, random_bytes: [u8; 32]) -> Result<()> {
+        let randomness = &mut ctx.accounts.randomness;
+        require!(!randomness.ready, CoinflipError::RandomnessAlreadyReady);
+        randomness.random_bytes = random_bytes;
+        randomness.ready = true;
+        emit!(RandomnessRevealed {
+            randomness: randomness.key(),
+            authority: randomness.authority
+        });
+        Ok(())
+    }
+
+    pub fn propose_admin_transfer(ctx: Context<UpdateConfig>, pending_admin: Pubkey) -> Result<()> {
+        ctx.accounts.config.pending_admin = pending_admin;
+        emit!(AdminTransferProposed {
+            config: ctx.accounts.config.key(),
+            admin: ctx.accounts.config.admin,
+            pending_admin
+        });
+        Ok(())
+    }
+
+    pub fn accept_admin_transfer(ctx: Context<AcceptAdminTransfer>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require!(
+            config.pending_admin == ctx.accounts.pending_admin.key(),
+            CoinflipError::Unauthorized
+        );
+        let old_admin = config.admin;
+        config.admin = ctx.accounts.pending_admin.key();
+        config.pending_admin = Pubkey::default();
+        emit!(AdminTransferred {
+            config: config.key(),
+            old_admin,
+            new_admin: config.admin
+        });
+        Ok(())
+    }
+
+    pub fn cancel_admin_transfer(ctx: Context<UpdateConfig>) -> Result<()> {
+        let pending_admin = ctx.accounts.config.pending_admin;
+        ctx.accounts.config.pending_admin = Pubkey::default();
+        emit!(AdminTransferCancelled {
+            config: ctx.accounts.config.key(),
+            admin: ctx.accounts.config.admin,
+            pending_admin
+        });
+        Ok(())
+    }
+
     pub fn rotate_seed(ctx: Context<RotateSeed>, new_seed_hash: [u8; 32]) -> Result<()> {
         let config = &mut ctx.accounts.config;
         config.current_seed_hash = new_seed_hash;
-        config.seed_epoch = config.seed_epoch.checked_add(1).ok_or(CoinflipError::MathOverflow)?;
+        config.seed_epoch = config
+            .seed_epoch
+            .checked_add(1)
+            .ok_or(CoinflipError::MathOverflow)?;
         emit!(SeedRotated {
             config: config.key(),
             seed_epoch: config.seed_epoch,
@@ -145,7 +244,10 @@ pub mod forge_coinflip {
         let available = (ctx.accounts.treasury_vault.amount as u128)
             .checked_sub(config.outstanding_liability)
             .ok_or(CoinflipError::InsufficientTreasury)?;
-        require!((amount as u128) <= available, CoinflipError::InsufficientTreasury);
+        require!(
+            (amount as u128) <= available,
+            CoinflipError::InsufficientTreasury
+        );
 
         let mint_key = config.token_mint;
         let signer_seeds: &[&[&[u8]]] = &[&[b"config", mint_key.as_ref(), &[config.bump]]];
@@ -170,11 +272,22 @@ pub mod forge_coinflip {
     /// can always pay a win; a bet is rejected if the vault (after this deposit)
     /// cannot cover all outstanding liabilities, or if its payout would exceed the
     /// per-bet ceiling relative to the pool.
-    pub fn place_bet(ctx: Context<PlaceBet>, amount: u64, choice: u8, client_seed: [u8; 32]) -> Result<()> {
+    pub fn place_bet(
+        ctx: Context<PlaceBet>,
+        amount: u64,
+        choice: u8,
+        client_seed: [u8; 32],
+    ) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(!config.paused, CoinflipError::GamePaused);
-        require!(choice == CHOICE_HEADS || choice == CHOICE_TAILS, CoinflipError::InvalidChoice);
-        require!(amount >= config.min_bet && amount <= config.max_bet, CoinflipError::BetOutsideLimits);
+        require!(
+            choice == CHOICE_HEADS || choice == CHOICE_TAILS,
+            CoinflipError::InvalidChoice
+        );
+        require!(
+            amount >= config.min_bet && amount <= config.max_bet,
+            CoinflipError::BetOutsideLimits
+        );
 
         let payout = compute_payout(amount, config.fee_bps)?;
 
@@ -186,14 +299,20 @@ pub mod forge_coinflip {
             .outstanding_liability
             .checked_add(payout as u128)
             .ok_or(CoinflipError::MathOverflow)?;
-        require!(vault_after >= new_liability, CoinflipError::InsufficientTreasury);
+        require!(
+            vault_after >= new_liability,
+            CoinflipError::InsufficientTreasury
+        );
 
         // Per-bet ceiling: payout <= vault_after * max_payout_bps / 10_000.
         let single_cap = vault_after
             .checked_mul(config.max_payout_bps_of_treasury as u128)
             .ok_or(CoinflipError::MathOverflow)?
             / 10_000u128;
-        require!((payout as u128) <= single_cap, CoinflipError::BetExceedsPayoutCap);
+        require!(
+            (payout as u128) <= single_cap,
+            CoinflipError::BetExceedsPayoutCap
+        );
 
         // Pull the wager into the vault.
         token::transfer(
@@ -223,13 +342,25 @@ pub mod forge_coinflip {
         bet.seed_hash = config.current_seed_hash;
         bet.seed_epoch = config.seed_epoch;
         bet.placed_slot = clock.slot;
+        bet.commit_slot = clock.slot;
+        bet.settlement_deadline_slot = clock
+            .slot
+            .checked_add(BET_EXPIRY_SLOTS)
+            .ok_or(CoinflipError::MathOverflow)?;
+        bet.randomness_account = ctx.accounts.randomness.key();
         bet.bump = ctx.bumps.bet;
 
         // Mutate config + player_state after all validation.
         let config = &mut ctx.accounts.config;
         config.outstanding_liability = new_liability;
-        config.total_bets = config.total_bets.checked_add(1).ok_or(CoinflipError::MathOverflow)?;
-        config.total_wagered = config.total_wagered.checked_add(amount as u128).ok_or(CoinflipError::MathOverflow)?;
+        config.total_bets = config
+            .total_bets
+            .checked_add(1)
+            .ok_or(CoinflipError::MathOverflow)?;
+        config.total_wagered = config
+            .total_wagered
+            .checked_add(amount as u128)
+            .ok_or(CoinflipError::MathOverflow)?;
 
         let ps = &mut ctx.accounts.player_state;
         ps.player = ctx.accounts.player.key();
@@ -251,38 +382,40 @@ pub mod forge_coinflip {
         Ok(())
     }
 
-    /// settle_authority resolves a bet. `won` is computed off-chain as
-    ///   result = HMAC_SHA256(server_seed, "<player>:<client_seed_hex>:<nonce>")
-    ///   won    = (result_bit == bet.choice)
-    /// On a win the program pays `bet.payout` from the vault to the player. The
-    /// program does NOT recompute the result on-chain in this baseline (see README
-    /// "Trust model" + "Hardening"): on-chain it enforces custody, the payout cap,
-    /// the correct recipient, and the settle-authority gate; off-chain reveal of
-    /// the epoch server_seed makes every `won`/`payout` independently verifiable.
-    pub fn settle_bet(ctx: Context<SettleBet>, won: bool) -> Result<()> {
+    /// Permissionless settlement. The program reads the exact randomness account
+    /// committed into the Bet and computes the result bit on-chain; callers cannot
+    /// supply or influence a win/loss boolean.
+    pub fn settle_bet(ctx: Context<SettleBet>) -> Result<()> {
+        require!(
+            ctx.accounts.bet.asset == ASSET_TOKEN,
+            CoinflipError::WrongAsset
+        );
+        let (result_bit, won) = verified_result(
+            &ctx.accounts.bet,
+            ctx.accounts.randomness.key(),
+            &ctx.accounts.randomness,
+        )?;
         let bet_payout = ctx.accounts.bet.payout;
         let bet_amount = ctx.accounts.bet.amount;
         let bet_choice = ctx.accounts.bet.choice;
         let bet_nonce = ctx.accounts.bet.nonce;
-        let bet_seed_hash = ctx.accounts.bet.seed_hash;
-        let bet_seed_epoch = ctx.accounts.bet.seed_epoch;
-        require!(ctx.accounts.bet.asset == ASSET_TOKEN, CoinflipError::WrongAsset);
+        let randomness_account = ctx.accounts.bet.randomness_account;
 
-        // Release the reservation regardless of outcome.
-        {
-            let config = &mut ctx.accounts.config;
-            config.outstanding_liability = config
-                .outstanding_liability
-                .checked_sub(bet_payout as u128)
-                .ok_or(CoinflipError::LiabilityUnderflow)?;
-        }
+        ctx.accounts.config.outstanding_liability = ctx
+            .accounts
+            .config
+            .outstanding_liability
+            .checked_sub(bet_payout as u128)
+            .ok_or(CoinflipError::LiabilityUnderflow)?;
 
         if won {
-            let config = &ctx.accounts.config;
-            // Vault always holds >= payout here because the reservation guaranteed it.
-            require!(ctx.accounts.treasury_vault.amount >= bet_payout, CoinflipError::InsufficientTreasury);
-            let mint_key = config.token_mint;
-            let signer_seeds: &[&[&[u8]]] = &[&[b"config", mint_key.as_ref(), &[config.bump]]];
+            require!(
+                ctx.accounts.treasury_vault.amount >= bet_payout,
+                CoinflipError::InsufficientTreasury
+            );
+            let mint_key = ctx.accounts.config.token_mint;
+            let signer_seeds: &[&[&[u8]]] =
+                &[&[b"config", mint_key.as_ref(), &[ctx.accounts.config.bump]]];
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.key(),
@@ -295,22 +428,25 @@ pub mod forge_coinflip {
                 ),
                 bet_payout,
             )?;
-            let config = &mut ctx.accounts.config;
-            config.total_paid_out = config.total_paid_out.checked_add(bet_payout as u128).ok_or(CoinflipError::MathOverflow)?;
+            ctx.accounts.config.total_paid_out = ctx
+                .accounts
+                .config
+                .total_paid_out
+                .checked_add(bet_payout as u128)
+                .ok_or(CoinflipError::MathOverflow)?;
         }
-
         emit!(BetSettled {
             config: ctx.accounts.config.key(),
             player: ctx.accounts.player.key(),
             nonce: bet_nonce,
+            asset: ASSET_TOKEN,
             amount: bet_amount,
             payout: bet_payout,
             choice: bet_choice,
+            result_bit,
             won,
-            seed_hash: bet_seed_hash,
-            seed_epoch: bet_seed_epoch,
+            randomness_account
         });
-        // Bet account closed via `close = player` constraint; rent returns to player.
         Ok(())
     }
 
@@ -321,11 +457,25 @@ pub mod forge_coinflip {
         let bet_payout = ctx.accounts.bet.payout;
         let bet_amount = ctx.accounts.bet.amount;
         let placed_slot = ctx.accounts.bet.placed_slot;
-        require!(ctx.accounts.bet.asset == ASSET_TOKEN, CoinflipError::WrongAsset);
+        require!(
+            !ctx.accounts.randomness.ready,
+            CoinflipError::RandomnessAlreadyReady
+        );
+        require!(
+            ctx.accounts.randomness.key() == ctx.accounts.bet.randomness_account,
+            CoinflipError::WrongRandomnessAccount
+        );
+        require!(
+            ctx.accounts.bet.asset == ASSET_TOKEN,
+            CoinflipError::WrongAsset
+        );
 
         let clock = Clock::get()?;
         require!(
-            clock.slot > placed_slot.checked_add(BET_EXPIRY_SLOTS).ok_or(CoinflipError::MathOverflow)?,
+            clock.slot
+                > placed_slot
+                    .checked_add(BET_EXPIRY_SLOTS)
+                    .ok_or(CoinflipError::MathOverflow)?,
             CoinflipError::BetNotExpired
         );
 
@@ -338,7 +488,10 @@ pub mod forge_coinflip {
         }
 
         let config = &ctx.accounts.config;
-        require!(ctx.accounts.treasury_vault.amount >= bet_amount, CoinflipError::InsufficientTreasury);
+        require!(
+            ctx.accounts.treasury_vault.amount >= bet_amount,
+            CoinflipError::InsufficientTreasury
+        );
         let mint_key = config.token_mint;
         let signer_seeds: &[&[&[u8]]] = &[&[b"config", mint_key.as_ref(), &[config.bump]]];
         token::transfer(
@@ -394,20 +547,38 @@ pub mod forge_coinflip {
             .ok_or(CoinflipError::InsufficientTreasury)?
             .checked_sub(config.outstanding_liability_sol)
             .ok_or(CoinflipError::InsufficientTreasury)?;
-        require!((amount as u128) <= spendable, CoinflipError::InsufficientTreasury);
+        require!(
+            (amount as u128) <= spendable,
+            CoinflipError::InsufficientTreasury
+        );
         **vault_ai.try_borrow_mut_lamports()? -= amount;
-        **ctx.accounts.admin.to_account_info().try_borrow_mut_lamports()? += amount;
+        **ctx
+            .accounts
+            .admin
+            .to_account_info()
+            .try_borrow_mut_lamports()? += amount;
         Ok(())
     }
 
     /// SOL equivalent of place_bet: the wager moves into the SOL vault via a System
     /// transfer (player signs) and the full potential payout is reserved against
     /// the vault's spendable (rent-excluded) balance.
-    pub fn place_bet_sol(ctx: Context<PlaceBetSol>, amount: u64, choice: u8, client_seed: [u8; 32]) -> Result<()> {
+    pub fn place_bet_sol(
+        ctx: Context<PlaceBetSol>,
+        amount: u64,
+        choice: u8,
+        client_seed: [u8; 32],
+    ) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(!config.paused, CoinflipError::GamePaused);
-        require!(choice == CHOICE_HEADS || choice == CHOICE_TAILS, CoinflipError::InvalidChoice);
-        require!(amount >= config.sol_min_bet && amount <= config.sol_max_bet, CoinflipError::BetOutsideLimits);
+        require!(
+            choice == CHOICE_HEADS || choice == CHOICE_TAILS,
+            CoinflipError::InvalidChoice
+        );
+        require!(
+            amount >= config.sol_min_bet && amount <= config.sol_max_bet,
+            CoinflipError::BetOutsideLimits
+        );
 
         let payout = compute_payout(amount, config.fee_bps)?;
 
@@ -417,18 +588,26 @@ pub mod forge_coinflip {
         let vault_spendable = (vault_ai.lamports() as u128)
             .checked_sub(rent_min as u128)
             .ok_or(CoinflipError::InsufficientTreasury)?;
-        let vault_after = vault_spendable.checked_add(amount as u128).ok_or(CoinflipError::MathOverflow)?;
+        let vault_after = vault_spendable
+            .checked_add(amount as u128)
+            .ok_or(CoinflipError::MathOverflow)?;
         let new_liability = config
             .outstanding_liability_sol
             .checked_add(payout as u128)
             .ok_or(CoinflipError::MathOverflow)?;
-        require!(vault_after >= new_liability, CoinflipError::InsufficientTreasury);
+        require!(
+            vault_after >= new_liability,
+            CoinflipError::InsufficientTreasury
+        );
 
         let single_cap = vault_after
             .checked_mul(config.max_payout_bps_of_treasury as u128)
             .ok_or(CoinflipError::MathOverflow)?
             / 10_000u128;
-        require!((payout as u128) <= single_cap, CoinflipError::BetExceedsPayoutCap);
+        require!(
+            (payout as u128) <= single_cap,
+            CoinflipError::BetExceedsPayoutCap
+        );
 
         // Pull the wager into the SOL vault (player signs the System transfer).
         system_transfer(
@@ -457,11 +636,20 @@ pub mod forge_coinflip {
         bet.seed_hash = config.current_seed_hash;
         bet.seed_epoch = config.seed_epoch;
         bet.placed_slot = clock.slot;
+        bet.commit_slot = clock.slot;
+        bet.settlement_deadline_slot = clock
+            .slot
+            .checked_add(BET_EXPIRY_SLOTS)
+            .ok_or(CoinflipError::MathOverflow)?;
+        bet.randomness_account = ctx.accounts.randomness.key();
         bet.bump = ctx.bumps.bet;
 
         let config = &mut ctx.accounts.config;
         config.outstanding_liability_sol = new_liability;
-        config.total_bets = config.total_bets.checked_add(1).ok_or(CoinflipError::MathOverflow)?;
+        config.total_bets = config
+            .total_bets
+            .checked_add(1)
+            .ok_or(CoinflipError::MathOverflow)?;
 
         let ps = &mut ctx.accounts.player_state;
         ps.player = ctx.accounts.player.key();
@@ -483,49 +671,64 @@ pub mod forge_coinflip {
         Ok(())
     }
 
-    /// SOL equivalent of settle_bet. On a win the program debits the SOL vault and
-    /// credits the player directly. Result is asserted off-chain (see settle_bet).
-    pub fn settle_bet_sol(ctx: Context<SettleBetSol>, won: bool) -> Result<()> {
+    /// SOL equivalent of settle_bet.
+    pub fn settle_bet_sol(ctx: Context<SettleBetSol>) -> Result<()> {
+        require!(
+            ctx.accounts.bet.asset == ASSET_SOL,
+            CoinflipError::WrongAsset
+        );
+        let (result_bit, won) = verified_result(
+            &ctx.accounts.bet,
+            ctx.accounts.randomness.key(),
+            &ctx.accounts.randomness,
+        )?;
         let bet_payout = ctx.accounts.bet.payout;
         let bet_amount = ctx.accounts.bet.amount;
         let bet_choice = ctx.accounts.bet.choice;
         let bet_nonce = ctx.accounts.bet.nonce;
-        let bet_seed_hash = ctx.accounts.bet.seed_hash;
-        let bet_seed_epoch = ctx.accounts.bet.seed_epoch;
-        require!(ctx.accounts.bet.asset == ASSET_SOL, CoinflipError::WrongAsset);
+        let randomness_account = ctx.accounts.bet.randomness_account;
 
-        {
-            let config = &mut ctx.accounts.config;
-            config.outstanding_liability_sol = config
-                .outstanding_liability_sol
-                .checked_sub(bet_payout as u128)
-                .ok_or(CoinflipError::LiabilityUnderflow)?;
-        }
+        ctx.accounts.config.outstanding_liability_sol = ctx
+            .accounts
+            .config
+            .outstanding_liability_sol
+            .checked_sub(bet_payout as u128)
+            .ok_or(CoinflipError::LiabilityUnderflow)?;
 
         if won {
             let vault_ai = ctx.accounts.sol_vault.to_account_info();
             let rent_min = Rent::get()?.minimum_balance(vault_ai.data_len());
             require!(
-                vault_ai.lamports() >= bet_payout.checked_add(rent_min).ok_or(CoinflipError::MathOverflow)?,
+                vault_ai.lamports()
+                    >= bet_payout
+                        .checked_add(rent_min)
+                        .ok_or(CoinflipError::MathOverflow)?,
                 CoinflipError::InsufficientTreasury
             );
             **vault_ai.try_borrow_mut_lamports()? -= bet_payout;
-            **ctx.accounts.player.to_account_info().try_borrow_mut_lamports()? += bet_payout;
-
-            let config = &mut ctx.accounts.config;
-            config.total_paid_out = config.total_paid_out.checked_add(bet_payout as u128).ok_or(CoinflipError::MathOverflow)?;
+            **ctx
+                .accounts
+                .player
+                .to_account_info()
+                .try_borrow_mut_lamports()? += bet_payout;
+            ctx.accounts.config.total_paid_out = ctx
+                .accounts
+                .config
+                .total_paid_out
+                .checked_add(bet_payout as u128)
+                .ok_or(CoinflipError::MathOverflow)?;
         }
-
         emit!(BetSettled {
             config: ctx.accounts.config.key(),
             player: ctx.accounts.player.key(),
             nonce: bet_nonce,
+            asset: ASSET_SOL,
             amount: bet_amount,
             payout: bet_payout,
             choice: bet_choice,
+            result_bit,
             won,
-            seed_hash: bet_seed_hash,
-            seed_epoch: bet_seed_epoch,
+            randomness_account
         });
         Ok(())
     }
@@ -535,11 +738,25 @@ pub mod forge_coinflip {
         let bet_payout = ctx.accounts.bet.payout;
         let bet_amount = ctx.accounts.bet.amount;
         let placed_slot = ctx.accounts.bet.placed_slot;
-        require!(ctx.accounts.bet.asset == ASSET_SOL, CoinflipError::WrongAsset);
+        require!(
+            !ctx.accounts.randomness.ready,
+            CoinflipError::RandomnessAlreadyReady
+        );
+        require!(
+            ctx.accounts.randomness.key() == ctx.accounts.bet.randomness_account,
+            CoinflipError::WrongRandomnessAccount
+        );
+        require!(
+            ctx.accounts.bet.asset == ASSET_SOL,
+            CoinflipError::WrongAsset
+        );
 
         let clock = Clock::get()?;
         require!(
-            clock.slot > placed_slot.checked_add(BET_EXPIRY_SLOTS).ok_or(CoinflipError::MathOverflow)?,
+            clock.slot
+                > placed_slot
+                    .checked_add(BET_EXPIRY_SLOTS)
+                    .ok_or(CoinflipError::MathOverflow)?,
             CoinflipError::BetNotExpired
         );
 
@@ -554,11 +771,18 @@ pub mod forge_coinflip {
         let vault_ai = ctx.accounts.sol_vault.to_account_info();
         let rent_min = Rent::get()?.minimum_balance(vault_ai.data_len());
         require!(
-            vault_ai.lamports() >= bet_amount.checked_add(rent_min).ok_or(CoinflipError::MathOverflow)?,
+            vault_ai.lamports()
+                >= bet_amount
+                    .checked_add(rent_min)
+                    .ok_or(CoinflipError::MathOverflow)?,
             CoinflipError::InsufficientTreasury
         );
         **vault_ai.try_borrow_mut_lamports()? -= bet_amount;
-        **ctx.accounts.player.to_account_info().try_borrow_mut_lamports()? += bet_amount;
+        **ctx
+            .accounts
+            .player
+            .to_account_info()
+            .try_borrow_mut_lamports()? += bet_amount;
 
         emit!(BetRefunded {
             config: ctx.accounts.config.key(),
@@ -576,13 +800,31 @@ pub mod forge_coinflip {
 /// house's favor). With fee_bps = 200 a 1000-token win pays 1960.
 fn compute_payout(amount: u64, fee_bps: u16) -> Result<u64> {
     let factor_bps = 2u128
-        .checked_mul((10_000u128).checked_sub(fee_bps as u128).ok_or(CoinflipError::MathOverflow)?)
+        .checked_mul(
+            (10_000u128)
+                .checked_sub(fee_bps as u128)
+                .ok_or(CoinflipError::MathOverflow)?,
+        )
         .ok_or(CoinflipError::MathOverflow)?;
     let payout = (amount as u128)
         .checked_mul(factor_bps)
         .ok_or(CoinflipError::MathOverflow)?
         / 10_000u128;
     u64::try_from(payout).map_err(|_| error!(CoinflipError::MathOverflow))
+}
+
+fn verified_result(
+    bet: &Bet,
+    randomness_key: Pubkey,
+    randomness: &Randomness,
+) -> Result<(u8, bool)> {
+    require!(
+        randomness_key == bet.randomness_account,
+        CoinflipError::WrongRandomnessAccount
+    );
+    require!(randomness.ready, CoinflipError::RandomnessNotReady);
+    let result_bit = randomness.random_bytes[0] & RANDOMNESS_READY_DISCRIMINATOR;
+    Ok((result_bit, result_bit == bet.choice))
 }
 
 // ----------------------------------------------------------------------------
@@ -592,7 +834,9 @@ fn compute_payout(amount: u64, fee_bps: u16) -> Result<u64> {
 #[derive(InitSpace)]
 pub struct GameConfig {
     pub admin: Pubkey,
+    pub pending_admin: Pubkey,
     pub settle_authority: Pubkey,
+    pub randomness_authority: Pubkey,
     pub token_mint: Pubkey,
     pub treasury_vault: Pubkey,
     pub current_seed_hash: [u8; 32],
@@ -636,6 +880,9 @@ pub struct Bet {
     pub seed_hash: [u8; 32],
     pub seed_epoch: u64,
     pub placed_slot: u64,
+    pub commit_slot: u64,
+    pub settlement_deadline_slot: u64,
+    pub randomness_account: Pubkey,
     pub bump: u8,
 }
 
@@ -648,12 +895,22 @@ pub struct SolVault {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct Randomness {
+    pub authority: Pubkey,
+    pub random_bytes: [u8; 32],
+    pub ready: bool,
+    pub bump: u8,
+}
+
 // ----------------------------------------------------------------------------
 // Instruction params
 // ----------------------------------------------------------------------------
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct InitializeParams {
     pub settle_authority: Pubkey,
+    pub randomness_authority: Pubkey,
     pub fee_bps: u16,
     pub min_bet: u64,
     pub max_bet: u64,
@@ -722,8 +979,34 @@ pub struct UpdateConfig<'info> {
 
 #[derive(Accounts)]
 pub struct RotateSeed<'info> {
-    #[account(constraint = settle_authority.key() == config.settle_authority @ CoinflipError::Unauthorized)]
-    pub settle_authority: Signer<'info>,
+    /// Permissionless crank/fee payer; outcome is computed by the program.
+    pub caller: Signer<'info>,
+    #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+}
+
+#[derive(Accounts)]
+pub struct CreateRandomness<'info> {
+    #[account(mut, constraint = randomness_authority.key() == config.randomness_authority @ CoinflipError::Unauthorized)]
+    pub randomness_authority: Signer<'info>,
+    #[account(seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
+    pub config: Account<'info, GameConfig>,
+    #[account(init, payer = randomness_authority, space = 8 + Randomness::INIT_SPACE, seeds = [b"randomness", config.key().as_ref(), randomness_authority.key().as_ref()], bump)]
+    pub randomness: Account<'info, Randomness>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct RevealRandomness<'info> {
+    #[account(constraint = randomness_authority.key() == randomness.authority @ CoinflipError::Unauthorized)]
+    pub randomness_authority: Signer<'info>,
+    #[account(mut)]
+    pub randomness: Account<'info, Randomness>,
+}
+
+#[derive(Accounts)]
+pub struct AcceptAdminTransfer<'info> {
+    pub pending_admin: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
     pub config: Account<'info, GameConfig>,
 }
@@ -792,14 +1075,15 @@ pub struct PlaceBet<'info> {
         constraint = player_token_account.owner == player.key() @ CoinflipError::WrongOwner
     )]
     pub player_token_account: Account<'info, TokenAccount>,
+    pub randomness: Account<'info, Randomness>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct SettleBet<'info> {
-    #[account(constraint = settle_authority.key() == config.settle_authority @ CoinflipError::Unauthorized)]
-    pub settle_authority: Signer<'info>,
+    /// Permissionless crank/fee payer; outcome is computed by the program.
+    pub caller: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
     pub config: Account<'info, GameConfig>,
     #[account(
@@ -822,6 +1106,7 @@ pub struct SettleBet<'info> {
         constraint = player_token_account.owner == bet.player @ CoinflipError::WrongOwner
     )]
     pub player_token_account: Account<'info, TokenAccount>,
+    pub randomness: Account<'info, Randomness>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -851,6 +1136,7 @@ pub struct RefundExpiredBet<'info> {
         constraint = player_token_account.owner == bet.player @ CoinflipError::WrongOwner
     )]
     pub player_token_account: Account<'info, TokenAccount>,
+    pub randomness: Account<'info, Randomness>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -899,13 +1185,14 @@ pub struct PlaceBetSol<'info> {
     pub bet: Account<'info, Bet>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
     pub sol_vault: Account<'info, SolVault>,
+    pub randomness: Account<'info, Randomness>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct SettleBetSol<'info> {
-    #[account(constraint = settle_authority.key() == config.settle_authority @ CoinflipError::Unauthorized)]
-    pub settle_authority: Signer<'info>,
+    /// Permissionless crank/fee payer; outcome is computed by the program.
+    pub caller: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
     pub config: Account<'info, GameConfig>,
     #[account(
@@ -922,6 +1209,7 @@ pub struct SettleBetSol<'info> {
     pub player: UncheckedAccount<'info>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
     pub sol_vault: Account<'info, SolVault>,
+    pub randomness: Account<'info, Randomness>,
 }
 
 #[derive(Accounts)]
@@ -944,6 +1232,7 @@ pub struct RefundExpiredBetSol<'info> {
     pub player: UncheckedAccount<'info>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
     pub sol_vault: Account<'info, SolVault>,
+    pub randomness: Account<'info, Randomness>,
 }
 
 // ----------------------------------------------------------------------------
@@ -987,9 +1276,10 @@ pub struct BetSettled {
     pub amount: u64,
     pub payout: u64,
     pub choice: u8,
+    pub result_bit: u8,
     pub won: bool,
-    pub seed_hash: [u8; 32],
-    pub seed_epoch: u64,
+    pub asset: u8,
+    pub randomness_account: Pubkey,
 }
 
 #[event]
@@ -997,6 +1287,30 @@ pub struct BetRefunded {
     pub config: Pubkey,
     pub player: Pubkey,
     pub amount: u64,
+}
+
+#[event]
+pub struct RandomnessRevealed {
+    pub randomness: Pubkey,
+    pub authority: Pubkey,
+}
+#[event]
+pub struct AdminTransferProposed {
+    pub config: Pubkey,
+    pub admin: Pubkey,
+    pub pending_admin: Pubkey,
+}
+#[event]
+pub struct AdminTransferred {
+    pub config: Pubkey,
+    pub old_admin: Pubkey,
+    pub new_admin: Pubkey,
+}
+#[event]
+pub struct AdminTransferCancelled {
+    pub config: Pubkey,
+    pub admin: Pubkey,
+    pub pending_admin: Pubkey,
 }
 
 // ----------------------------------------------------------------------------
@@ -1042,4 +1356,10 @@ pub enum CoinflipError {
     WrongAsset,
     #[msg("Arithmetic overflow")]
     MathOverflow,
+    #[msg("Randomness account does not match the bet commitment")]
+    WrongRandomnessAccount,
+    #[msg("Randomness is not ready")]
+    RandomnessNotReady,
+    #[msg("Randomness is already ready; settle instead of refund")]
+    RandomnessAlreadyReady,
 }

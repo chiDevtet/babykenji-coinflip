@@ -11,6 +11,8 @@ fairnessRouter.get("/commitment", async (_req, res) => {
     const active = await getActiveCommit();
     const onchain = await fetchConfig();
     res.json({
+      legacy: true,
+      warning: "Server-seed fairness is legacy and is not authoritative for new verified-randomness bets.",
       epoch: active.epoch,
       commitHashHex: active.commitHashHex,
       onchainSeedHashHex: onchain?.currentSeedHashHex ?? null,
@@ -28,7 +30,7 @@ fairnessRouter.get("/reveal/:epoch", async (req, res) => {
   if (!Number.isInteger(epoch) || epoch < 0) return res.status(400).json({ error: "invalid epoch" });
   const revealed = await getRevealedSeed(epoch);
   if (!revealed) return res.status(404).json({ error: "unknown epoch" });
-  res.json(revealed);
+  res.json({ legacy: true, warning: "Historical server-seed reveal only; not used for new bets.", ...revealed });
 });
 
 /**
@@ -56,7 +58,7 @@ fairnessRouter.post("/verify", async (req, res) => {
     }
 
     const result = verify(seedHex, committedHashHex, String(player), String(clientSeedHex), Number(nonce), Number(choice));
-    res.json(result);
+    res.json({ legacy: true, warning: "Historical verifier only; settled outcomes come from chain state for new bets.", ...result });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
