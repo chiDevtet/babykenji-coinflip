@@ -27,6 +27,8 @@ export const config = {
   rpcUrl: required("RPC_URL"),
   programId: new PublicKey(required("PROGRAM_ID")),
   tokenMint: new PublicKey(required("TOKEN_MINT")),
+  switchboardProgramId: new PublicKey(required("SWITCHBOARD_PROGRAM_ID")),
+  switchboardQueue: new PublicKey(required("SWITCHBOARD_QUEUE")),
   settleAuthority,
   mongoUri: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/forge_coinflip",
   port: parseInt(process.env.PORT || "8787", 10),

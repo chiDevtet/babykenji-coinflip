@@ -16,8 +16,9 @@ no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
-# Pinned to Anchor 1.0 (current GA, shipped 2026-04). If your `avm` is on
-# 0.30/0.31/0.32, set both to that version — the program source is compatible.
+# Pinned to Anchor 0.31.1 to match the current Switchboard On-Demand randomness examples.
+# Keep anchor-lang and anchor-spl in sync.
 [dependencies]
-anchor-lang = { version = "1.0", features = ["init-if-needed"] }
-anchor-spl = "1.0"
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+anchor-spl = "0.31.1"
+switchboard-on-demand = { version = "0.10.8", default-features = false, features = ["solana-v2"] }

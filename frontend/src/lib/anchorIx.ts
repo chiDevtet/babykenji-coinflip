@@ -37,12 +37,6 @@ export function betPda(player: PublicKey, nonce: bigint): PublicKey {
   )[0];
 }
 
-export function randomnessPda(player: PublicKey, nonce: bigint): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [enc("randomness"), configPda().toBuffer(), player.toBuffer(), nonceLe(nonce)].slice(0, 3),
-    PROGRAM_ID
-  )[0];
-}
 
 // --- Decoders ---
 // PlayerState: disc(8) player(32) config(32) nonce(u64 @72) bump(@80)
@@ -90,7 +84,8 @@ export function buildPlaceBetIx(
   amount: bigint,
   choice: number,
   clientSeed: Uint8Array, // 32 bytes
-  nonce: bigint
+  nonce: bigint,
+  randomnessAccount: PublicKey
 ): TransactionInstruction {
   if (clientSeed.length !== 32) throw new Error("clientSeed must be 32 bytes");
   const cfg = configPda();
@@ -101,7 +96,7 @@ export function buildPlaceBetIx(
     { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
     { pubkey: vaultPda(cfg), isSigner: false, isWritable: true },
     { pubkey: getAssociatedTokenAddressSync(TOKEN_MINT, player), isSigner: false, isWritable: true },
-    { pubkey: randomnessPda(player, nonce), isSigner: false, isWritable: false },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
@@ -121,7 +116,8 @@ export function buildPlaceBetSolIx(
   amount: bigint,
   choice: number,
   clientSeed: Uint8Array, // 32 bytes
-  nonce: bigint
+  nonce: bigint,
+  randomnessAccount: PublicKey
 ): TransactionInstruction {
   if (clientSeed.length !== 32) throw new Error("clientSeed must be 32 bytes");
   const cfg = configPda();
@@ -131,7 +127,7 @@ export function buildPlaceBetSolIx(
     { pubkey: playerStatePda(cfg, player), isSigner: false, isWritable: true },
     { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
     { pubkey: solVaultPda(cfg), isSigner: false, isWritable: true },
-    { pubkey: randomnessPda(player, nonce), isSigner: false, isWritable: false },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
 

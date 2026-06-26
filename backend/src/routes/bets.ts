@@ -8,6 +8,7 @@ import {
   buildRefundSolIx,
   sendIxs,
 } from "../solana";
+import { buildRevealIx } from "../switchboard";
 import { BetModel } from "../models/Bet";
 import { PlayerModel } from "../models/Player";
 
@@ -44,7 +45,8 @@ betsRouter.post("/settle", async (req, res) => {
     // Outcome authority removed: the program reads the stored randomness account and computes win/loss on-chain.
     const isSol = bet.asset === ASSET_SOL;
     const settleIx = isSol ? buildSettleSolIx(playerPk, n, bet.randomnessAccount) : buildSettleIx(playerPk, n, bet.randomnessAccount);
-    const settleTx = await sendIxs([settleIx]);
+    const revealIx = await buildRevealIx(bet.randomnessAccount);
+    const settleTx = await sendIxs([revealIx, settleIx]);
 
     // Mirror to Mongo for history (never the source of truth).
     await BetModel.updateOne(
@@ -80,7 +82,7 @@ betsRouter.post("/settle", async (req, res) => {
       settleTx,
     });
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: "settlement failed" });
   }
 });
 
@@ -139,7 +141,7 @@ betsRouter.get("/recent", async (req, res) => {
     const all = await getRecentSettled();
     res.json({ bets: all.slice(0, limit) });
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: "request failed" });
   }
 });
 
@@ -156,7 +158,7 @@ betsRouter.post("/refund", async (req, res) => {
     const tx = await sendIxs([refundIx]);
     res.json({ refundTx: tx, asset: bet.asset === ASSET_SOL ? "sol" : "token" });
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: "request failed" });
   }
 });
 
