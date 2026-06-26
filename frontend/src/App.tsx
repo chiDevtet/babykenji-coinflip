@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { Transaction } from "@solana/web3.js";
+import { createCommittedRandomness } from "./lib/switchboard";
 import { getMint, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { TOKEN_MINT, CONFIGURED, type Asset } from "./lib/constants";
 import { buildPlaceBetIx, buildPlaceBetSolIx, fetchConfigView, fetchPlayerNonce, type ConfigView } from "./lib/anchorIx";
@@ -207,17 +208,18 @@ export default function App() {
       setSpinning(true);
       try {
         const currentNonce = await fetchPlayerNonce(connection, publicKey);
-        const ix =
+        const sbRandomness = await createCommittedRandomness(connection, publicKey);
+        const placeIx =
           asset === "sol"
-            ? buildPlaceBetSolIx(publicKey, amountBase, choice, clientSeed, currentNonce)
-            : buildPlaceBetIx(publicKey, amountBase, choice, clientSeed, currentNonce);
+            ? buildPlaceBetSolIx(publicKey, amountBase, choice, clientSeed, currentNonce, sbRandomness.keypair.publicKey)
+            : buildPlaceBetIx(publicKey, amountBase, choice, clientSeed, currentNonce, sbRandomness.keypair.publicKey);
 
-        const tx = new Transaction().add(ix);
+        const tx = new Transaction().add(sbRandomness.createIx, sbRandomness.commitIx, placeIx);
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
         tx.recentBlockhash = blockhash;
         tx.feePayer = publicKey;
 
-        const sig = await sendTransaction(tx, connection);
+        const sig = await sendTransaction(tx, connection, { signers: [sbRandomness.keypair] });
         await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
 
         // Backend reads the asset off-chain from the Bet PDA and settles with the

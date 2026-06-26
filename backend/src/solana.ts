@@ -218,7 +218,7 @@ export async function sendIxs(ixs: TransactionInstruction[]): Promise<string> {
   const tx = new Transaction().add(...ixs);
   tx.feePayer = config.settleAuthority.publicKey;
   return sendAndConfirmTransaction(connection, tx, [config.settleAuthority], {
-    commitment: "confirmed",
+    commitment: "finalized",
     skipPreflight: false,
   });
 }
