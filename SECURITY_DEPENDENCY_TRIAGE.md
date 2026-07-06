@@ -1,0 +1,15 @@
+# Security Dependency Triage
+
+## Open high/critical findings
+
+| package | advisory | dependency path | direct/transitive | runtime reachable | browser reachable | fixed version | reason not fixed | mitigation | risk owner | review date | launch blocker |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `bigint-buffer` | GHSA-3gc7-fjrx-p6mg | `@solana/spl-token` / `@solana/web3.js` / `@switchboard-xyz/on-demand` | transitive | yes | backend: no, frontend: yes | no non-breaking tree available from current Solana/Switchboard stack via `npm audit`; suggested fix downgrades `@solana/spl-token` to `0.1.8` | `npm audit fix --force` would break Solana/Switchboard compatibility | avoid exposing attacker-controlled binary buffers to low-level conversion APIs; monitor upstream Solana/Switchboard releases; pin lockfiles; run audit in CI | project owner required | 2026-07-06 | yes until owner accepts or upstream fix lands |
+| `elliptic` | GHSA-848j-6mx2-7j84 | wallet adapters / WalletConnect / Torus / Trezor transitive tree | transitive | frontend runtime potentially | yes | requires breaking wallet-adapter downgrade per npm | broad wallet adapter bundle pulls vulnerable chains; force fix changes wallet stack | consider reducing supported adapters to audited wallets only; monitor wallet adapter releases | project owner required | 2026-07-06 | yes until owner accepts or dependencies removed |
+| `lodash` | GHSA-r5fr-rjxr-66jc, GHSA-f23m-r3pf-42rh, GHSA-xxjr-mmjv-4gpg | WalletConnect / appkit transitive tree | transitive | frontend runtime potentially | yes | requires breaking wallet-adapter downgrade per npm | force fix changes wallet stack | avoid passing untrusted template/path data; consider removing WalletConnect adapter | project owner required | 2026-07-06 | yes until owner accepts or dependencies removed |
+| `protobufjs` | multiple critical protobufjs advisories including GHSA-xq3m-2v4x-88gg | Trezor / protobuf transitive tree | transitive | frontend runtime potentially if Trezor path is bundled/used | yes | npm reports non-force fix available but audit still reports vulnerable nested copies after fix attempt | nested wallet-adapter dependencies remain | remove Trezor adapter or upgrade wallet-adapter tree when fixed; do not launch browser bundle with unaccepted critical finding | project owner required | 2026-07-06 | yes |
+| `ws` | GHSA-58qx-3vcg-4xpx, GHSA-96hv-2xvq-fx4p | WalletConnect / viem transitive tree | transitive | frontend dependency; websocket client paths potentially | yes | requires breaking wallet-adapter downgrade per npm | force fix changes wallet stack | remove WalletConnect adapter or upgrade wallet-adapter tree when fixed | project owner required | 2026-07-06 | yes until owner accepts or dependencies removed |
+
+## Moderate findings not launch-blocking by severity gate
+
+`uuid` via `jayson`/`@solana/web3.js` remains moderate in the current dependency tree. It is tracked but is not a high/critical launch blocker unless a direct runtime path is introduced that passes caller-controlled buffers to UUID v3/v5/v6 APIs.

@@ -1,0 +1,43 @@
+name: Mainnet Readiness CI
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+            program/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Solana CLI
+        run: sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)" && echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+      - name: Install Anchor CLI
+        run: cargo install --git https://github.com/coral-xyz/anchor avm --locked --force && avm install 0.31.1 && avm use 0.31.1
+      - name: Toolchain versions
+        run: anchor --version && solana --version && rustc --version && cargo --version && node --version && npm --version
+      - name: Program checks
+        working-directory: program/programs/forge-coinflip
+        run: cargo check && cargo check --features mainnet && cargo clippy -- -D warnings && cargo clippy --features mainnet -- -D warnings
+      - name: Anchor build and test
+        working-directory: program
+        run: npm ci && anchor build && anchor test
+      - name: Backend
+        working-directory: backend
+        run: npm ci && npm run typecheck && npm test && npm audit --audit-level=high
+      - name: Frontend
+        working-directory: frontend
+        run: npm ci && npm run typecheck && npm test && npm audit --audit-level=high
+  switchboard-devnet:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Optional funded devnet Switchboard integration job. Requires DEVNET_KEYPAIR_JSON, RPC_URL, SWITCHBOARD_QUEUE."
