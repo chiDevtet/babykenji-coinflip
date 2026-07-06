@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "license": "MIT",
   "scripts": {
-    "test": "anchor test"
+    "test": "anchor test",
+    "program:build:devnet": "anchor build",
+    "program:build:mainnet": "anchor build -- --features mainnet",
+    "program:check:devnet": "cd programs/forge-coinflip && cargo check",
+    "program:check:mainnet": "cd programs/forge-coinflip && cargo check --features mainnet"
   },
   "devDependencies": {
     "@coral-xyz/anchor": "^0.31.1",

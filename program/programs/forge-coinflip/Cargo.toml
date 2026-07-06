@@ -10,6 +10,7 @@ name = "forge_coinflip"
 
 [features]
 default = []
+mainnet = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []

@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs, deprecated)]
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{transfer as system_transfer, Transfer as SystemTransfer};
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
@@ -771,9 +772,20 @@ fn compute_payout(amount: u64, fee_bps: u16) -> Result<u64> {
     u64::try_from(payout).map_err(|_| error!(CoinflipError::MathOverflow))
 }
 
+fn expected_switchboard_program_id() -> Pubkey {
+    #[cfg(feature = "mainnet")]
+    {
+        get_sb_program_id("mainnet")
+    }
+    #[cfg(not(feature = "mainnet"))]
+    {
+        get_sb_program_id("devnet")
+    }
+}
+
 fn parse_switchboard_randomness(randomness: &AccountInfo) -> Result<RandomnessAccountData> {
     require!(
-        *randomness.owner == get_sb_program_id("devnet") || *randomness.owner == get_sb_program_id("mainnet"),
+        *randomness.owner == expected_switchboard_program_id(),
         CoinflipError::InvalidRandomnessOwner
     );
     let data = RandomnessAccountData::parse(randomness.data.borrow())
@@ -1356,4 +1368,24 @@ pub enum CoinflipError {
     RandomnessExpired,
     #[msg("Randomness seed slot does not match the stored bet commit slot")]
     RandomnessSeedSlotMismatch,
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(feature = "mainnet"))]
+    fn default_build_accepts_only_devnet_switchboard_owner() {
+        assert_eq!(expected_switchboard_program_id(), get_sb_program_id("devnet"));
+        assert_ne!(expected_switchboard_program_id(), get_sb_program_id("mainnet"));
+    }
+
+    #[test]
+    #[cfg(feature = "mainnet")]
+    fn mainnet_build_accepts_only_mainnet_switchboard_owner() {
+        assert_eq!(expected_switchboard_program_id(), get_sb_program_id("mainnet"));
+        assert_ne!(expected_switchboard_program_id(), get_sb_program_id("devnet"));
+    }
 }
