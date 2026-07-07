@@ -21,7 +21,7 @@
 19. Place Baby Kenji flip; player ATA must contain tokens.
 20. Settle token flip; verify player token account gets win payout if won.
 21. Verify fee accounting: Bet event and backend mirror show fee amounts. **Known limitation:** current program does not transfer fees externally or burn tokens.
-22. Verify holder rewards accumulation: only DB/rewards primitives exist today; no on-chain fee accumulation to rewards account is wired.
+22. Verify holder rewards accumulation with `npx ts-node scripts/print-holder-rewards-balances.ts`; automatic distribution is disabled by default.
 23. Run Monte Carlo: `cd backend && npm run test:monte-carlo && npm run monte-carlo:stress`.
 24. Run backend/frontend tests: `cd backend && npm run typecheck && npm test`; `cd frontend && npm run typecheck && npm test`.
 25. Run real Switchboard devnet integration before mainnet: complete multiple place/reveal/settle flows against devnet queue and record tx signatures.

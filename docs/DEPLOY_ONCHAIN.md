@@ -2,7 +2,7 @@
 
 ## Current readiness answer
 
-No: this repository is **not safe for mainnet** until the checklist gates pass. The on-chain program contains core SOL/token flip flows and Switchboard owner feature gating, but fee-recipient transfer/burn plumbing is incomplete: `settle_bet`/`settle_bet_sol` only pay player wins and emit fee amounts; their account contexts do not include team/dev/holder fee accounts or SPL burn accounts. Fees remain in the vault unless a later admin/manual process withdraws them. Production fee distribution is therefore blocked if automatic on-chain routing is required.
+No: this repository is **not safe for mainnet** until the checklist gates pass. The on-chain program contains core SOL/token flip flows and Switchboard owner feature gating, but fee-recipient transfer/burn plumbing is implemented in the current code path, but launch remains gated on Anchor build/test and real Switchboard devnet smoke execution.
 
 ## Prerequisites and toolchain
 

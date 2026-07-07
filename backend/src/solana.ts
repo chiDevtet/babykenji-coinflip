@@ -61,6 +61,9 @@ export interface DecodedBet {
   config: PublicKey;
   player: PublicKey;
   amount: bigint;
+  feeTeamRecipient: PublicKey;
+  feeDevRecipient: PublicKey;
+  feeHolderRewardsRecipient: PublicKey;
   payout: bigint;
   playerWinPayoutBps: number;
   playerWinPayout: bigint;
@@ -91,26 +94,29 @@ export function decodeBet(data: Buffer): DecodedBet {
     config: new PublicKey(data.subarray(8, 40)),
     player: new PublicKey(data.subarray(40, 72)),
     amount: data.readBigUInt64LE(72),
-    payout: data.readBigUInt64LE(82),
-    playerWinPayoutBps: data.readUInt16LE(80),
-    playerWinPayout: data.readBigUInt64LE(82),
-    totalFeeAmount: data.readBigUInt64LE(90),
-    teamFeeAmount: data.readBigUInt64LE(98),
-    devFeeAmount: data.readBigUInt64LE(106),
-    burnFeeAmount: data.readBigUInt64LE(114),
-    holderRewardsFeeAmount: data.readBigUInt64LE(122),
-    totalWinLiability: data.readBigUInt64LE(130),
-    choice: data.readUInt8(138),
-    asset: data.readUInt8(139),
-    clientSeedHex: data.subarray(140, 172).toString("hex"),
-    nonce: data.readBigUInt64LE(172),
-    seedHashHex: data.subarray(180, 212).toString("hex"),
-    seedEpoch: data.readBigUInt64LE(212),
-    placedSlot: data.readBigUInt64LE(220),
-    commitSlot: data.readBigUInt64LE(228),
-    settlementDeadlineSlot: data.readBigUInt64LE(236),
-    randomnessAccount: new PublicKey(data.subarray(244, 276)),
-    bump: data.readUInt8(276),
+    feeTeamRecipient: new PublicKey(data.subarray(80, 112)),
+    feeDevRecipient: new PublicKey(data.subarray(112, 144)),
+    feeHolderRewardsRecipient: new PublicKey(data.subarray(144, 176)),
+    payout: data.readBigUInt64LE(178),
+    playerWinPayoutBps: data.readUInt16LE(176),
+    playerWinPayout: data.readBigUInt64LE(178),
+    totalFeeAmount: data.readBigUInt64LE(186),
+    teamFeeAmount: data.readBigUInt64LE(194),
+    devFeeAmount: data.readBigUInt64LE(202),
+    burnFeeAmount: data.readBigUInt64LE(210),
+    holderRewardsFeeAmount: data.readBigUInt64LE(218),
+    totalWinLiability: data.readBigUInt64LE(226),
+    choice: data.readUInt8(234),
+    asset: data.readUInt8(235),
+    clientSeedHex: data.subarray(236, 268).toString("hex"),
+    nonce: data.readBigUInt64LE(268),
+    seedHashHex: data.subarray(276, 308).toString("hex"),
+    seedEpoch: data.readBigUInt64LE(308),
+    placedSlot: data.readBigUInt64LE(316),
+    commitSlot: data.readBigUInt64LE(324),
+    settlementDeadlineSlot: data.readBigUInt64LE(332),
+    randomnessAccount: new PublicKey(data.subarray(340, 372)),
+    bump: data.readUInt8(372),
   };
 }
 
@@ -119,6 +125,12 @@ export interface DecodedConfig {
   settleAuthority: PublicKey;
   tokenMint: PublicKey;
   treasuryVault: PublicKey;
+  solTeamWallet: PublicKey;
+  solDevBuybackWallet: PublicKey;
+  solHolderRewardsWallet: PublicKey;
+  tokenTeamFeeAccount: PublicKey;
+  tokenDevFeeAccount: PublicKey;
+  tokenHolderRewardsAccount: PublicKey;
   currentSeedHashHex: string;
   seedEpoch: bigint;
   feeBps: number;
@@ -136,15 +148,21 @@ export function decodeConfig(data: Buffer): DecodedConfig {
     settleAuthority: new PublicKey(data.subarray(72, 104)),
     tokenMint: new PublicKey(data.subarray(136, 168)),
     treasuryVault: new PublicKey(data.subarray(168, 200)),
-    currentSeedHashHex: data.subarray(200, 232).toString("hex"),
-    seedEpoch: data.readBigUInt64LE(232),
-    feeBps: data.readUInt16LE(240),
-    outstandingLiability: readU128LE(data, 260),
-    paused: data.readUInt8(276) === 1,
-    solVault: new PublicKey(data.subarray(317, 349)),
-    solMinBet: data.readBigUInt64LE(349),
-    solMaxBet: data.readBigUInt64LE(357),
-    outstandingLiabilitySol: readU128LE(data, 365),
+    solTeamWallet: new PublicKey(data.subarray(200, 232)),
+    solDevBuybackWallet: new PublicKey(data.subarray(232, 264)),
+    solHolderRewardsWallet: new PublicKey(data.subarray(264, 296)),
+    tokenTeamFeeAccount: new PublicKey(data.subarray(296, 328)),
+    tokenDevFeeAccount: new PublicKey(data.subarray(328, 360)),
+    tokenHolderRewardsAccount: new PublicKey(data.subarray(360, 392)),
+    currentSeedHashHex: data.subarray(392, 424).toString("hex"),
+    seedEpoch: data.readBigUInt64LE(424),
+    feeBps: data.readUInt16LE(432),
+    outstandingLiability: readU128LE(data, 452),
+    paused: data.readUInt8(468) === 1,
+    solVault: new PublicKey(data.subarray(509, 541)),
+    solMinBet: data.readBigUInt64LE(541),
+    solMaxBet: data.readBigUInt64LE(549),
+    outstandingLiabilitySol: readU128LE(data, 557),
   };
 }
 
@@ -161,7 +179,10 @@ export async function fetchConfig(): Promise<DecodedConfig | null> {
 }
 
 // --- Instruction builders (account order MUST match the Rust contexts) ---
-export function buildSettleIx(player: PublicKey, nonce: number | bigint, randomnessAccount: PublicKey): TransactionInstruction {
+export function buildSettleIx(bet: DecodedBet): TransactionInstruction {
+  const player = bet.player;
+  const nonce = bet.nonce;
+  const randomnessAccount = bet.randomnessAccount;
   const cfg = configPda();
   const keys = [
     { pubkey: config.settleAuthority.publicKey, isSigner: true, isWritable: false },
@@ -170,6 +191,10 @@ export function buildSettleIx(player: PublicKey, nonce: number | bigint, randomn
     { pubkey: player, isSigner: false, isWritable: true },
     { pubkey: vaultPda(cfg), isSigner: false, isWritable: true },
     { pubkey: getAssociatedTokenAddressSync(TOKEN_MINT, player), isSigner: false, isWritable: true },
+    { pubkey: bet.feeTeamRecipient, isSigner: false, isWritable: true },
+    { pubkey: bet.feeDevRecipient, isSigner: false, isWritable: true },
+    { pubkey: bet.feeHolderRewardsRecipient, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_MINT, isSigner: false, isWritable: true },
     { pubkey: randomnessAccount, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
@@ -192,7 +217,10 @@ export function buildRefundIx(player: PublicKey, nonce: number | bigint, randomn
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data: ixDisc("refund_expired_bet") });
 }
 
-export function buildSettleSolIx(player: PublicKey, nonce: number | bigint, randomnessAccount: PublicKey): TransactionInstruction {
+export function buildSettleSolIx(bet: DecodedBet): TransactionInstruction {
+  const player = bet.player;
+  const nonce = bet.nonce;
+  const randomnessAccount = bet.randomnessAccount;
   const cfg = configPda();
   const keys = [
     { pubkey: config.settleAuthority.publicKey, isSigner: true, isWritable: false },
@@ -200,6 +228,9 @@ export function buildSettleSolIx(player: PublicKey, nonce: number | bigint, rand
     { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
     { pubkey: player, isSigner: false, isWritable: true },
     { pubkey: solVaultPda(cfg), isSigner: false, isWritable: true },
+    { pubkey: bet.feeTeamRecipient, isSigner: false, isWritable: true },
+    { pubkey: bet.feeDevRecipient, isSigner: false, isWritable: true },
+    { pubkey: bet.feeHolderRewardsRecipient, isSigner: false, isWritable: true },
     { pubkey: randomnessAccount, isSigner: false, isWritable: false },
   ];
   const data = ixDisc("settle_bet_sol");

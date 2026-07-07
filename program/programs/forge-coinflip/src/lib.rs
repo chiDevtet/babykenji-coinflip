@@ -1,7 +1,7 @@
 #![allow(unexpected_cfgs, deprecated)]
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{transfer as system_transfer, Transfer as SystemTransfer};
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 use switchboard_on_demand::accounts::RandomnessAccountData;
 use switchboard_on_demand::get_sb_program_id;
 
@@ -69,6 +69,12 @@ pub mod forge_coinflip {
         config.randomness_authority = params.randomness_authority;
         config.token_mint = ctx.accounts.mint.key();
         config.treasury_vault = ctx.accounts.treasury_vault.key();
+        config.sol_team_wallet = params.sol_team_wallet;
+        config.sol_dev_buyback_wallet = params.sol_dev_buyback_wallet;
+        config.sol_holder_rewards_wallet = params.sol_holder_rewards_wallet;
+        config.token_team_fee_account = params.token_team_fee_account;
+        config.token_dev_fee_account = params.token_dev_fee_account;
+        config.token_holder_rewards_account = params.token_holder_rewards_account;
         config.current_seed_hash = params.seed_hash;
         config.seed_epoch = 0;
         let sol_payout_bps = if params.sol_player_win_payout_bps == 0 {
@@ -337,6 +343,9 @@ pub mod forge_coinflip {
         bet.config = config.key();
         bet.player = ctx.accounts.player.key();
         bet.amount = amount;
+        bet.fee_team_recipient = config.token_team_fee_account;
+        bet.fee_dev_recipient = config.token_dev_fee_account;
+        bet.fee_holder_rewards_recipient = config.token_holder_rewards_account;
         bet.player_win_payout_bps = payout_bps;
         bet.player_win_payout = payout;
         bet.total_fee_amount = total_fee_amount;
@@ -392,6 +401,9 @@ pub mod forge_coinflip {
             dev_fee_amount: bet.dev_fee_amount,
             burn_fee_amount: bet.burn_fee_amount,
             holder_rewards_fee_amount: bet.holder_rewards_fee_amount,
+            fee_team_recipient: bet.fee_team_recipient,
+            fee_dev_recipient: bet.fee_dev_recipient,
+            fee_holder_rewards_recipient: bet.fee_holder_rewards_recipient,
             player_win_payout_bps: payout_bps,
             total_fee_amount,
             total_win_liability,
@@ -460,6 +472,47 @@ pub mod forge_coinflip {
                 .checked_add(bet_payout as u128)
                 .ok_or(CoinflipError::MathOverflow)?;
         }
+        let mint_key = ctx.accounts.config.token_mint;
+        let signer_seeds: &[&[&[u8]]] =
+            &[&[b"config", mint_key.as_ref(), &[ctx.accounts.config.bump]]];
+        transfer_tokens_from_vault(
+            &ctx.accounts.token_program,
+            &ctx.accounts.treasury_vault,
+            &ctx.accounts.team_fee_token_account,
+            &ctx.accounts.config.to_account_info(),
+            signer_seeds,
+            ctx.accounts.bet.team_fee_amount,
+        )?;
+        transfer_tokens_from_vault(
+            &ctx.accounts.token_program,
+            &ctx.accounts.treasury_vault,
+            &ctx.accounts.dev_fee_token_account,
+            &ctx.accounts.config.to_account_info(),
+            signer_seeds,
+            ctx.accounts.bet.dev_fee_amount,
+        )?;
+        transfer_tokens_from_vault(
+            &ctx.accounts.token_program,
+            &ctx.accounts.treasury_vault,
+            &ctx.accounts.holder_rewards_fee_token_account,
+            &ctx.accounts.config.to_account_info(),
+            signer_seeds,
+            ctx.accounts.bet.holder_rewards_fee_amount,
+        )?;
+        if ctx.accounts.bet.burn_fee_amount > 0 {
+            token::burn(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Burn {
+                        mint: ctx.accounts.token_mint.to_account_info(),
+                        from: ctx.accounts.treasury_vault.to_account_info(),
+                        authority: ctx.accounts.config.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                ctx.accounts.bet.burn_fee_amount,
+            )?;
+        }
         emit!(BetSettled {
             config: ctx.accounts.config.key(),
             player: ctx.accounts.player.key(),
@@ -471,6 +524,9 @@ pub mod forge_coinflip {
             dev_fee_amount: ctx.accounts.bet.dev_fee_amount,
             burn_fee_amount: ctx.accounts.bet.burn_fee_amount,
             holder_rewards_fee_amount: ctx.accounts.bet.holder_rewards_fee_amount,
+            fee_team_recipient: ctx.accounts.bet.fee_team_recipient,
+            fee_dev_recipient: ctx.accounts.bet.fee_dev_recipient,
+            fee_holder_rewards_recipient: ctx.accounts.bet.fee_holder_rewards_recipient,
             player_win_payout_bps: ctx.accounts.bet.player_win_payout_bps,
             total_fee_amount: ctx.accounts.bet.total_fee_amount,
             total_win_liability: bet_liability,
@@ -651,6 +707,9 @@ pub mod forge_coinflip {
         bet.config = config.key();
         bet.player = ctx.accounts.player.key();
         bet.amount = amount;
+        bet.fee_team_recipient = config.sol_team_wallet;
+        bet.fee_dev_recipient = config.sol_dev_buyback_wallet;
+        bet.fee_holder_rewards_recipient = config.sol_holder_rewards_wallet;
         bet.player_win_payout_bps = payout_bps;
         bet.player_win_payout = payout;
         bet.total_fee_amount = total_fee_amount;
@@ -700,6 +759,9 @@ pub mod forge_coinflip {
             dev_fee_amount: bet.dev_fee_amount,
             burn_fee_amount: bet.burn_fee_amount,
             holder_rewards_fee_amount: bet.holder_rewards_fee_amount,
+            fee_team_recipient: bet.fee_team_recipient,
+            fee_dev_recipient: bet.fee_dev_recipient,
+            fee_holder_rewards_recipient: bet.fee_holder_rewards_recipient,
             player_win_payout_bps: payout_bps,
             total_fee_amount,
             total_win_liability,
@@ -762,6 +824,21 @@ pub mod forge_coinflip {
                 .checked_add(bet_payout as u128)
                 .ok_or(CoinflipError::MathOverflow)?;
         }
+        transfer_lamports_preserving_rent(
+            &ctx.accounts.sol_vault.to_account_info(),
+            &ctx.accounts.team_sol_wallet.to_account_info(),
+            ctx.accounts.bet.team_fee_amount,
+        )?;
+        transfer_lamports_preserving_rent(
+            &ctx.accounts.sol_vault.to_account_info(),
+            &ctx.accounts.dev_buyback_sol_wallet.to_account_info(),
+            ctx.accounts.bet.dev_fee_amount,
+        )?;
+        transfer_lamports_preserving_rent(
+            &ctx.accounts.sol_vault.to_account_info(),
+            &ctx.accounts.holder_rewards_sol_wallet.to_account_info(),
+            ctx.accounts.bet.holder_rewards_fee_amount,
+        )?;
         emit!(BetSettled {
             config: ctx.accounts.config.key(),
             player: ctx.accounts.player.key(),
@@ -773,6 +850,9 @@ pub mod forge_coinflip {
             dev_fee_amount: ctx.accounts.bet.dev_fee_amount,
             burn_fee_amount: ctx.accounts.bet.burn_fee_amount,
             holder_rewards_fee_amount: ctx.accounts.bet.holder_rewards_fee_amount,
+            fee_team_recipient: ctx.accounts.bet.fee_team_recipient,
+            fee_dev_recipient: ctx.accounts.bet.fee_dev_recipient,
+            fee_holder_rewards_recipient: ctx.accounts.bet.fee_holder_rewards_recipient,
             player_win_payout_bps: ctx.accounts.bet.player_win_payout_bps,
             total_fee_amount: ctx.accounts.bet.total_fee_amount,
             total_win_liability: bet_liability,
@@ -965,6 +1045,52 @@ fn validate_randomness_unresolved_for_refund(bet: &Bet, randomness: &AccountInfo
     Ok(())
 }
 
+fn transfer_tokens_from_vault<'info>(
+    token_program: &Program<'info, Token>,
+    from: &Account<'info, TokenAccount>,
+    to: &Account<'info, TokenAccount>,
+    authority: &AccountInfo<'info>,
+    signer_seeds: &[&[&[u8]]],
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    token::transfer(
+        CpiContext::new_with_signer(
+            token_program.to_account_info(),
+            Transfer {
+                from: from.to_account_info(),
+                to: to.to_account_info(),
+                authority: authority.clone(),
+            },
+            signer_seeds,
+        ),
+        amount,
+    )
+}
+
+fn transfer_lamports_preserving_rent<'info>(
+    from: &AccountInfo<'info>,
+    to: &AccountInfo<'info>,
+    amount: u64,
+) -> Result<()> {
+    if amount == 0 {
+        return Ok(());
+    }
+    let rent_min = Rent::get()?.minimum_balance(from.data_len());
+    require!(
+        from.lamports()
+            >= amount
+                .checked_add(rent_min)
+                .ok_or(CoinflipError::MathOverflow)?,
+        CoinflipError::InsufficientTreasury
+    );
+    **from.try_borrow_mut_lamports()? -= amount;
+    **to.try_borrow_mut_lamports()? += amount;
+    Ok(())
+}
+
 // ----------------------------------------------------------------------------
 // State
 // ----------------------------------------------------------------------------
@@ -977,6 +1103,12 @@ pub struct GameConfig {
     pub randomness_authority: Pubkey,
     pub token_mint: Pubkey,
     pub treasury_vault: Pubkey,
+    pub sol_team_wallet: Pubkey,
+    pub sol_dev_buyback_wallet: Pubkey,
+    pub sol_holder_rewards_wallet: Pubkey,
+    pub token_team_fee_account: Pubkey,
+    pub token_dev_fee_account: Pubkey,
+    pub token_holder_rewards_account: Pubkey,
     pub current_seed_hash: [u8; 32],
     pub seed_epoch: u64,
     pub fee_bps: u16,
@@ -1012,6 +1144,9 @@ pub struct Bet {
     pub config: Pubkey,
     pub player: Pubkey,
     pub amount: u64,
+    pub fee_team_recipient: Pubkey,
+    pub fee_dev_recipient: Pubkey,
+    pub fee_holder_rewards_recipient: Pubkey,
     pub player_win_payout_bps: u16,
     pub player_win_payout: u64,
     pub total_fee_amount: u64,
@@ -1049,6 +1184,12 @@ pub struct SolVault {
 pub struct InitializeParams {
     pub settle_authority: Pubkey,
     pub randomness_authority: Pubkey,
+    pub sol_team_wallet: Pubkey,
+    pub sol_dev_buyback_wallet: Pubkey,
+    pub sol_holder_rewards_wallet: Pubkey,
+    pub token_team_fee_account: Pubkey,
+    pub token_dev_fee_account: Pubkey,
+    pub token_holder_rewards_account: Pubkey,
     pub fee_bps: u16,
     pub sol_player_win_payout_bps: u16,
     pub token_player_win_payout_bps: u16,
@@ -1230,6 +1371,14 @@ pub struct SettleBet<'info> {
         constraint = player_token_account.owner == bet.player @ CoinflipError::WrongOwner
     )]
     pub player_token_account: Account<'info, TokenAccount>,
+    #[account(mut, constraint = team_fee_token_account.key() == bet.fee_team_recipient @ CoinflipError::WrongFeeRecipient, constraint = team_fee_token_account.mint == config.token_mint @ CoinflipError::WrongMint)]
+    pub team_fee_token_account: Account<'info, TokenAccount>,
+    #[account(mut, constraint = dev_fee_token_account.key() == bet.fee_dev_recipient @ CoinflipError::WrongFeeRecipient, constraint = dev_fee_token_account.mint == config.token_mint @ CoinflipError::WrongMint)]
+    pub dev_fee_token_account: Account<'info, TokenAccount>,
+    #[account(mut, constraint = holder_rewards_fee_token_account.key() == bet.fee_holder_rewards_recipient @ CoinflipError::WrongFeeRecipient, constraint = holder_rewards_fee_token_account.mint == config.token_mint @ CoinflipError::WrongMint)]
+    pub holder_rewards_fee_token_account: Account<'info, TokenAccount>,
+    #[account(mut, constraint = token_mint.key() == config.token_mint @ CoinflipError::WrongMint)]
+    pub token_mint: Account<'info, Mint>,
     /// CHECK: Switchboard randomness account parsed and owner-checked in the handler
     pub randomness: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -1336,6 +1485,15 @@ pub struct SettleBetSol<'info> {
     pub player: UncheckedAccount<'info>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
     pub sol_vault: Account<'info, SolVault>,
+    /// CHECK: exact SOL team fee wallet snapshotted on the bet.
+    #[account(mut, address = bet.fee_team_recipient @ CoinflipError::WrongFeeRecipient)]
+    pub team_sol_wallet: UncheckedAccount<'info>,
+    /// CHECK: exact SOL dev/buyback fee wallet snapshotted on the bet.
+    #[account(mut, address = bet.fee_dev_recipient @ CoinflipError::WrongFeeRecipient)]
+    pub dev_buyback_sol_wallet: UncheckedAccount<'info>,
+    /// CHECK: exact SOL holder rewards fee wallet snapshotted on the bet.
+    #[account(mut, address = bet.fee_holder_rewards_recipient @ CoinflipError::WrongFeeRecipient)]
+    pub holder_rewards_sol_wallet: UncheckedAccount<'info>,
     /// CHECK: Switchboard randomness account parsed and owner-checked in the handler
     pub randomness: AccountInfo<'info>,
 }
@@ -1389,6 +1547,9 @@ pub struct BetPlaced {
     pub player: Pubkey,
     pub nonce: u64,
     pub amount: u64,
+    pub fee_team_recipient: Pubkey,
+    pub fee_dev_recipient: Pubkey,
+    pub fee_holder_rewards_recipient: Pubkey,
     pub player_win_payout_bps: u16,
     pub player_win_payout: u64,
     pub total_fee_amount: u64,
@@ -1412,6 +1573,9 @@ pub struct BetSettled {
     pub player: Pubkey,
     pub nonce: u64,
     pub amount: u64,
+    pub fee_team_recipient: Pubkey,
+    pub fee_dev_recipient: Pubkey,
+    pub fee_holder_rewards_recipient: Pubkey,
     pub player_win_payout_bps: u16,
     pub player_win_payout: u64,
     pub total_fee_amount: u64,
@@ -1500,6 +1664,8 @@ pub enum CoinflipError {
     InvalidPlayerWinPayoutBps,
     #[msg("Wager too small after fee/payout rounding")]
     DustWager,
+    #[msg("Fee recipient does not match the bet snapshot")]
+    WrongFeeRecipient,
     #[msg("Randomness account does not match the bet commitment")]
     WrongRandomnessAccount,
     #[msg("Randomness is not ready")]

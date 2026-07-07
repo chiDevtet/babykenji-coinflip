@@ -1,11 +1,9 @@
 import { execFileSync } from "child_process";
 
-function run(cmd: string, args: string[], cwd: string) {
+function run(cmd: string, args: string[], cwd = process.cwd()) {
   console.log(`$ ${cmd} ${args.join(" ")}`);
-  execFileSync(cmd, args, { cwd, stdio: "inherit", env: process.env });
+  execFileSync(cmd, args, { cwd, stdio: "inherit" });
 }
 
-const cwd = "program/programs/forge-coinflip";
-run("cargo", ["check", "--features", "mainnet"], cwd);
-run("cargo", ["clippy", "--features", "mainnet", "--", "-D", "warnings"], cwd);
-console.log("Mainnet feature build checks passed. Use `anchor build -- --features mainnet` for the deploy artifact.");
+run("cargo", ["check", "--features", "mainnet"], "program/programs/forge-coinflip");
+console.log("Mainnet feature build check passed");

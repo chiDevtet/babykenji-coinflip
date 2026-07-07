@@ -99,7 +99,7 @@ The settlement surface is `POST /api/bets/settle` with `{ "player": "<PLAYER>", 
 
 ## Holder rewards worker status
 
-`backend/src/rewards/worker.ts` implements deterministic holder aggregation, pro-rata allocation, Mongo `RewardCycle` creation, Mongo `RewardPayout` creation, sent marking, and failed-payout retry state. It does **not** currently scan on-chain Baby Kenji holders, does **not** send SOL/SPL transfers, and does **not** run a production daemon. Treat holder rewards as primitives only until sender/scanner/idempotent transaction execution is implemented and tested.
+`backend/src/rewards/worker.ts` implements deterministic holder aggregation, pro-rata allocation, Mongo `RewardCycle` creation, Mongo `RewardPayout` creation, sent marking, and failed-payout retry state. It is not enabled for production by default. Set `HOLDER_REWARDS_MODE=accumulate_only` for MVP; do not advertise automatic distributions until scanner/sender/idempotent execution passes end-to-end tests.
 
 ## Security operations
 
