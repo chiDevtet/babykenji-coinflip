@@ -207,3 +207,36 @@ Also run [`docs/POST_DEPLOY_VERIFICATION.md`](POST_DEPLOY_VERIFICATION.md).
 ## Mainnet go/no-go
 
 Do not proceed unless every hard gate in [`MAINNET_RELEASE_CHECKLIST.md`](MAINNET_RELEASE_CHECKLIST.md) passes, including dependency audit disposition, real Switchboard devnet test, Anchor/Solana build/test, mainnet feature verification, fee routing/burn decision, migration plan, and external audit/risk acceptance.
+
+## Closed Program ID Recovery
+
+The old program id `DmHi2MW2ibqqGMAgg3EtumHTaguKbydSnszAHiGUf3WA` is treated as closed/unusable because deploy failed with a missing ProgramData account. Do **not** reuse it for launch.
+
+Fresh launch program id: `9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH`.
+
+Recovery/deploy steps:
+
+```bash
+cd program
+rm -f target/deploy/forge_coinflip-keypair.json
+solana-keygen new -o target/deploy/forge_coinflip-keypair.json --no-bip39-passphrase --force
+anchor keys sync
+anchor build
+```
+
+After syncing, verify `declare_id!`, `program/Anchor.toml`, backend `PROGRAM_ID`, frontend `VITE_PROGRAM_ID`, and script environments all point at the fresh program id. All PDAs change when the program id changes: initialize a new `GameConfig`, SOL vault PDA, token treasury vault, PlayerState PDAs, and Bet PDAs. Existing PDAs under the closed id are not valid for the new deployment.
+
+Before mainnet, run the devnet smoke path with the fresh id:
+
+```bash
+solana config set --url devnet
+cd program
+anchor build
+anchor deploy --provider.cluster devnet
+npx ts-node ../scripts/init-config.ts --cluster devnet
+npx ts-node ../scripts/verify-config.ts --cluster devnet
+npx ts-node ../scripts/devnet-smoke-test.ts
+npx ts-node ../scripts/verify-no-old-program-id.ts
+```
+
+Mainnet remains blocked until devnet smoke prints successful place/reveal/settle signatures and balance deltas for SOL and token flips, including fee routing, Baby Kenji burn, holder rewards accumulation, and wrong-account rejection checks.

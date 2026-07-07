@@ -7,7 +7,7 @@ use switchboard_on_demand::get_sb_program_id;
 
 // IMPORTANT: placeholder program id. After `anchor build`, run `anchor keys sync`
 // (or `anchor keys list`) and replace this with the real key, then rebuild.
-declare_id!("DmHi2MW2ibqqGMAgg3EtumHTaguKbydSnszAHiGUf3WA");
+declare_id!("9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH");
 
 // ----------------------------------------------------------------------------
 // Constants
@@ -1222,7 +1222,7 @@ pub struct UpdateParams {
 pub struct InitializeConfig<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
-    pub mint: Account<'info, Mint>,
+    pub mint: Box<Account<'info, Mint>>,
     #[account(
         init,
         payer = admin,
@@ -1230,7 +1230,7 @@ pub struct InitializeConfig<'info> {
         seeds = [b"config", mint.key().as_ref()],
         bump
     )]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(
         init,
         payer = admin,
@@ -1239,7 +1239,7 @@ pub struct InitializeConfig<'info> {
         token::mint = mint,
         token::authority = config
     )]
-    pub treasury_vault: Account<'info, TokenAccount>,
+    pub treasury_vault: Box<Account<'info, TokenAccount>>,
     #[account(
         init,
         payer = admin,
@@ -1247,7 +1247,7 @@ pub struct InitializeConfig<'info> {
         seeds = [b"sol_vault", config.key().as_ref()],
         bump
     )]
-    pub sol_vault: Account<'info, SolVault>,
+    pub sol_vault: Box<Account<'info, SolVault>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -1257,7 +1257,7 @@ pub struct InitializeConfig<'info> {
 pub struct UpdateConfig<'info> {
     pub admin: Signer<'info>,
     #[account(mut, has_one = admin, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
 }
 
 #[derive(Accounts)]
@@ -1265,14 +1265,14 @@ pub struct RotateSeed<'info> {
     /// Permissionless crank/fee payer; outcome is computed by the program.
     pub caller: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
 }
 
 #[derive(Accounts)]
 pub struct AcceptAdminTransfer<'info> {
     pub pending_admin: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
 }
 
 #[derive(Accounts)]
@@ -1280,15 +1280,15 @@ pub struct DepositTreasury<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     #[account(has_one = admin, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(mut, constraint = treasury_vault.key() == config.treasury_vault @ CoinflipError::WrongVault)]
-    pub treasury_vault: Account<'info, TokenAccount>,
+    pub treasury_vault: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         constraint = admin_token_account.mint == config.token_mint @ CoinflipError::WrongMint,
         constraint = admin_token_account.owner == admin.key() @ CoinflipError::WrongOwner
     )]
-    pub admin_token_account: Account<'info, TokenAccount>,
+    pub admin_token_account: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -1297,15 +1297,15 @@ pub struct WithdrawTreasury<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     #[account(mut, has_one = admin, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(mut, constraint = treasury_vault.key() == config.treasury_vault @ CoinflipError::WrongVault)]
-    pub treasury_vault: Account<'info, TokenAccount>,
+    pub treasury_vault: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         constraint = admin_token_account.mint == config.token_mint @ CoinflipError::WrongMint,
         constraint = admin_token_account.owner == admin.key() @ CoinflipError::WrongOwner
     )]
-    pub admin_token_account: Account<'info, TokenAccount>,
+    pub admin_token_account: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -1314,7 +1314,7 @@ pub struct PlaceBet<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(
         init_if_needed,
         payer = player,
@@ -1322,7 +1322,7 @@ pub struct PlaceBet<'info> {
         seeds = [b"player", config.key().as_ref(), player.key().as_ref()],
         bump
     )]
-    pub player_state: Account<'info, PlayerState>,
+    pub player_state: Box<Account<'info, PlayerState>>,
     #[account(
         init,
         payer = player,
@@ -1330,15 +1330,15 @@ pub struct PlaceBet<'info> {
         seeds = [b"bet", player.key().as_ref(), player_state.nonce.to_le_bytes().as_ref()],
         bump
     )]
-    pub bet: Account<'info, Bet>,
+    pub bet: Box<Account<'info, Bet>>,
     #[account(mut, constraint = treasury_vault.key() == config.treasury_vault @ CoinflipError::WrongVault)]
-    pub treasury_vault: Account<'info, TokenAccount>,
+    pub treasury_vault: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         constraint = player_token_account.mint == config.token_mint @ CoinflipError::WrongMint,
         constraint = player_token_account.owner == player.key() @ CoinflipError::WrongOwner
     )]
-    pub player_token_account: Account<'info, TokenAccount>,
+    pub player_token_account: Box<Account<'info, TokenAccount>>,
     /// CHECK: Switchboard randomness account parsed and owner-checked in the handler
     pub randomness: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -1350,7 +1350,7 @@ pub struct SettleBet<'info> {
     /// Permissionless crank/fee payer; outcome is computed by the program.
     pub caller: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(
         mut,
         close = player,
@@ -1359,26 +1359,26 @@ pub struct SettleBet<'info> {
         seeds = [b"bet", bet.player.as_ref(), bet.nonce.to_le_bytes().as_ref()],
         bump = bet.bump
     )]
-    pub bet: Account<'info, Bet>,
+    pub bet: Box<Account<'info, Bet>>,
     /// CHECK: recipient of the bet's rent + payout; validated by `has_one = player` on `bet`.
     #[account(mut)]
     pub player: UncheckedAccount<'info>,
     #[account(mut, constraint = treasury_vault.key() == config.treasury_vault @ CoinflipError::WrongVault)]
-    pub treasury_vault: Account<'info, TokenAccount>,
+    pub treasury_vault: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         constraint = player_token_account.mint == config.token_mint @ CoinflipError::WrongMint,
         constraint = player_token_account.owner == bet.player @ CoinflipError::WrongOwner
     )]
-    pub player_token_account: Account<'info, TokenAccount>,
+    pub player_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut, constraint = team_fee_token_account.key() == bet.fee_team_recipient @ CoinflipError::WrongFeeRecipient, constraint = team_fee_token_account.mint == config.token_mint @ CoinflipError::WrongMint)]
-    pub team_fee_token_account: Account<'info, TokenAccount>,
+    pub team_fee_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut, constraint = dev_fee_token_account.key() == bet.fee_dev_recipient @ CoinflipError::WrongFeeRecipient, constraint = dev_fee_token_account.mint == config.token_mint @ CoinflipError::WrongMint)]
-    pub dev_fee_token_account: Account<'info, TokenAccount>,
+    pub dev_fee_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut, constraint = holder_rewards_fee_token_account.key() == bet.fee_holder_rewards_recipient @ CoinflipError::WrongFeeRecipient, constraint = holder_rewards_fee_token_account.mint == config.token_mint @ CoinflipError::WrongMint)]
-    pub holder_rewards_fee_token_account: Account<'info, TokenAccount>,
+    pub holder_rewards_fee_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut, constraint = token_mint.key() == config.token_mint @ CoinflipError::WrongMint)]
-    pub token_mint: Account<'info, Mint>,
+    pub token_mint: Box<Account<'info, Mint>>,
     /// CHECK: Switchboard randomness account parsed and owner-checked in the handler
     pub randomness: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -1389,7 +1389,7 @@ pub struct RefundExpiredBet<'info> {
     /// Permissionless caller (pays tx fee). Funds always go to bet.player.
     pub caller: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(
         mut,
         close = player,
@@ -1398,18 +1398,18 @@ pub struct RefundExpiredBet<'info> {
         seeds = [b"bet", bet.player.as_ref(), bet.nonce.to_le_bytes().as_ref()],
         bump = bet.bump
     )]
-    pub bet: Account<'info, Bet>,
+    pub bet: Box<Account<'info, Bet>>,
     /// CHECK: recipient of rent + refund; validated by `has_one = player` on `bet`.
     #[account(mut)]
     pub player: UncheckedAccount<'info>,
     #[account(mut, constraint = treasury_vault.key() == config.treasury_vault @ CoinflipError::WrongVault)]
-    pub treasury_vault: Account<'info, TokenAccount>,
+    pub treasury_vault: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         constraint = player_token_account.mint == config.token_mint @ CoinflipError::WrongMint,
         constraint = player_token_account.owner == bet.player @ CoinflipError::WrongOwner
     )]
-    pub player_token_account: Account<'info, TokenAccount>,
+    pub player_token_account: Box<Account<'info, TokenAccount>>,
     /// CHECK: Switchboard randomness account parsed and owner-checked in the handler
     pub randomness: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -1420,9 +1420,9 @@ pub struct DepositSolTreasury<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     #[account(has_one = admin, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
-    pub sol_vault: Account<'info, SolVault>,
+    pub sol_vault: Box<Account<'info, SolVault>>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1431,9 +1431,9 @@ pub struct WithdrawSolTreasury<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     #[account(mut, has_one = admin, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
-    pub sol_vault: Account<'info, SolVault>,
+    pub sol_vault: Box<Account<'info, SolVault>>,
 }
 
 #[derive(Accounts)]
@@ -1441,7 +1441,7 @@ pub struct PlaceBetSol<'info> {
     #[account(mut)]
     pub player: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(
         init_if_needed,
         payer = player,
@@ -1449,7 +1449,7 @@ pub struct PlaceBetSol<'info> {
         seeds = [b"player", config.key().as_ref(), player.key().as_ref()],
         bump
     )]
-    pub player_state: Account<'info, PlayerState>,
+    pub player_state: Box<Account<'info, PlayerState>>,
     #[account(
         init,
         payer = player,
@@ -1457,9 +1457,9 @@ pub struct PlaceBetSol<'info> {
         seeds = [b"bet", player.key().as_ref(), player_state.nonce.to_le_bytes().as_ref()],
         bump
     )]
-    pub bet: Account<'info, Bet>,
+    pub bet: Box<Account<'info, Bet>>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
-    pub sol_vault: Account<'info, SolVault>,
+    pub sol_vault: Box<Account<'info, SolVault>>,
     /// CHECK: Switchboard randomness account parsed and owner-checked in the handler
     pub randomness: AccountInfo<'info>,
     pub system_program: Program<'info, System>,
@@ -1470,7 +1470,7 @@ pub struct SettleBetSol<'info> {
     /// Permissionless crank/fee payer; outcome is computed by the program.
     pub caller: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(
         mut,
         close = player,
@@ -1479,12 +1479,12 @@ pub struct SettleBetSol<'info> {
         seeds = [b"bet", bet.player.as_ref(), bet.nonce.to_le_bytes().as_ref()],
         bump = bet.bump
     )]
-    pub bet: Account<'info, Bet>,
+    pub bet: Box<Account<'info, Bet>>,
     /// CHECK: recipient of the bet's rent + payout; validated by `has_one = player` on `bet`.
     #[account(mut)]
     pub player: UncheckedAccount<'info>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
-    pub sol_vault: Account<'info, SolVault>,
+    pub sol_vault: Box<Account<'info, SolVault>>,
     /// CHECK: exact SOL team fee wallet snapshotted on the bet.
     #[account(mut, address = bet.fee_team_recipient @ CoinflipError::WrongFeeRecipient)]
     pub team_sol_wallet: UncheckedAccount<'info>,
@@ -1503,7 +1503,7 @@ pub struct RefundExpiredBetSol<'info> {
     /// Permissionless caller (pays tx fee). Funds always go to bet.player.
     pub caller: Signer<'info>,
     #[account(mut, seeds = [b"config", config.token_mint.as_ref()], bump = config.bump)]
-    pub config: Account<'info, GameConfig>,
+    pub config: Box<Account<'info, GameConfig>>,
     #[account(
         mut,
         close = player,
@@ -1512,12 +1512,12 @@ pub struct RefundExpiredBetSol<'info> {
         seeds = [b"bet", bet.player.as_ref(), bet.nonce.to_le_bytes().as_ref()],
         bump = bet.bump
     )]
-    pub bet: Account<'info, Bet>,
+    pub bet: Box<Account<'info, Bet>>,
     /// CHECK: recipient of rent + refund; validated by `has_one = player` on `bet`.
     #[account(mut)]
     pub player: UncheckedAccount<'info>,
     #[account(mut, seeds = [b"sol_vault", config.key().as_ref()], bump = sol_vault.bump)]
-    pub sol_vault: Account<'info, SolVault>,
+    pub sol_vault: Box<Account<'info, SolVault>>,
     /// CHECK: Switchboard randomness account parsed and owner-checked in the handler
     pub randomness: AccountInfo<'info>,
 }

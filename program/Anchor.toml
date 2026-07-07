@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.mainnet]
-forge_coinflip = "DmHi2MW2ibqqGMAgg3EtumHTaguKbydSnszAHiGUf3WA"
+forge_coinflip = "9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH"
 
 [provider]
 cluster = "mainnet"
