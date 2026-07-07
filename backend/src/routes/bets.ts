@@ -44,7 +44,7 @@ betsRouter.post("/settle", async (req, res) => {
 
     // Outcome authority removed: the program reads the stored randomness account and computes win/loss on-chain.
     const isSol = bet.asset === ASSET_SOL;
-    const settleIx = isSol ? buildSettleSolIx(playerPk, n, bet.randomnessAccount) : buildSettleIx(playerPk, n, bet.randomnessAccount);
+    const settleIx = isSol ? buildSettleSolIx(bet) : buildSettleIx(bet);
     const revealIx = await buildRevealIx(bet.randomnessAccount);
     const settleTx = await sendIxs([revealIx, settleIx]);
 
