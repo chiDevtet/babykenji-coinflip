@@ -48,6 +48,8 @@ export async function fetchPlayerNonce(connection: Connection, player: PublicKey
 
 export interface ConfigView {
   feeBps: number;
+  solPlayerWinPayoutBps: number;
+  tokenPlayerWinPayoutBps: number;
   minBet: bigint;
   maxBet: bigint;
   paused: boolean;
@@ -68,13 +70,15 @@ export async function fetchConfigView(connection: Connection): Promise<ConfigVie
   const hex = Array.from(hashBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
   return {
     feeBps: dv.getUint16(240, true),
-    minBet: dv.getBigUint64(242, true),
-    maxBet: dv.getBigUint64(250, true),
+    solPlayerWinPayoutBps: dv.getUint16(242, true),
+    tokenPlayerWinPayoutBps: dv.getUint16(244, true),
+    minBet: dv.getBigUint64(246, true),
+    maxBet: dv.getBigUint64(254, true),
     seedEpoch: dv.getBigUint64(232, true),
     currentSeedHashHex: hex,
-    paused: info.data[276] === 1,
-    solMinBet: dv.getBigUint64(349, true),
-    solMaxBet: dv.getBigUint64(357, true),
+    paused: info.data[280] === 1,
+    solMinBet: dv.getBigUint64(353, true),
+    solMaxBet: dv.getBigUint64(361, true),
   };
 }
 

@@ -12,10 +12,12 @@ declare_id!("DmHi2MW2ibqqGMAgg3EtumHTaguKbydSnszAHiGUf3WA");
 // ----------------------------------------------------------------------------
 // Constants
 // ----------------------------------------------------------------------------
-/// Maximum house edge expressible, in basis points (10% here). A bet pays
-/// `2 * (10_000 - fee_bps) / 10_000` times the wager on a win, so fee_bps is a
-/// hard ceiling that protects players from a misconfigured/abusive edge.
+/// Maximum external fee expressible, in basis points (10% here). Fees are
+/// reserved in addition to the player win payout, so payout bps is configured
+/// independently from fee bps.
 const MAX_FEE_BPS: u16 = 1_000;
+const DEFAULT_PLAYER_WIN_PAYOUT_BPS: u16 = 17_800;
+const MIN_PLAYER_WIN_PAYOUT_BPS: u16 = 10_000;
 /// Maximum single-bet payout, expressed as a fraction of the vault balance.
 /// 2_500 bps = 25% ceiling for the configurable `max_payout_bps_of_treasury`.
 const MAX_PAYOUT_BPS_CEILING: u16 = 2_500;
@@ -69,7 +71,21 @@ pub mod forge_coinflip {
         config.treasury_vault = ctx.accounts.treasury_vault.key();
         config.current_seed_hash = params.seed_hash;
         config.seed_epoch = 0;
+        let sol_payout_bps = if params.sol_player_win_payout_bps == 0 {
+            DEFAULT_PLAYER_WIN_PAYOUT_BPS
+        } else {
+            params.sol_player_win_payout_bps
+        };
+        let token_payout_bps = if params.token_player_win_payout_bps == 0 {
+            DEFAULT_PLAYER_WIN_PAYOUT_BPS
+        } else {
+            params.token_player_win_payout_bps
+        };
+        validate_payout_config(params.fee_bps, sol_payout_bps)?;
+        validate_payout_config(params.fee_bps, token_payout_bps)?;
         config.fee_bps = params.fee_bps;
+        config.sol_player_win_payout_bps = sol_payout_bps;
+        config.token_player_win_payout_bps = token_payout_bps;
         config.min_bet = params.min_bet;
         config.max_bet = params.max_bet;
         config.max_payout_bps_of_treasury = params.max_payout_bps_of_treasury;
@@ -104,6 +120,8 @@ pub mod forge_coinflip {
         }
         if let Some(v) = params.fee_bps {
             require!(v <= MAX_FEE_BPS, CoinflipError::FeeTooHigh);
+            validate_payout_config(v, config.sol_player_win_payout_bps)?;
+            validate_payout_config(v, config.token_player_win_payout_bps)?;
             config.fee_bps = v;
         }
         if let Some(v) = params.min_bet {
@@ -132,6 +150,14 @@ pub mod forge_coinflip {
                 CoinflipError::InvalidPayoutCap
             );
             config.max_payout_bps_of_treasury = v;
+        }
+        if let Some(v) = params.sol_player_win_payout_bps {
+            validate_payout_config(config.fee_bps, v)?;
+            config.sol_player_win_payout_bps = v;
+        }
+        if let Some(v) = params.token_player_win_payout_bps {
+            validate_payout_config(config.fee_bps, v)?;
+            config.token_player_win_payout_bps = v;
         }
         if let Some(v) = params.paused {
             config.paused = v;
@@ -262,7 +288,11 @@ pub mod forge_coinflip {
             CoinflipError::BetOutsideLimits
         );
 
-        let payout = compute_payout(amount, config.fee_bps)?;
+        let payout_bps = config.token_player_win_payout_bps;
+        validate_payout_config(config.fee_bps, payout_bps)?;
+        let total_fee_amount = compute_total_fee(amount, config.fee_bps)?;
+        let payout = compute_player_win_payout(amount, payout_bps)?;
+        let total_win_liability = compute_total_win_liability(payout, total_fee_amount)?;
 
         // Solvency: vault AFTER receiving this wager must cover every reserved payout.
         let vault_after = (ctx.accounts.treasury_vault.amount as u128)
@@ -270,7 +300,7 @@ pub mod forge_coinflip {
             .ok_or(CoinflipError::MathOverflow)?;
         let new_liability = config
             .outstanding_liability
-            .checked_add(payout as u128)
+            .checked_add(total_win_liability as u128)
             .ok_or(CoinflipError::MathOverflow)?;
         require!(
             vault_after >= new_liability,
@@ -307,7 +337,18 @@ pub mod forge_coinflip {
         bet.config = config.key();
         bet.player = ctx.accounts.player.key();
         bet.amount = amount;
-        bet.payout = payout;
+        bet.player_win_payout_bps = payout_bps;
+        bet.player_win_payout = payout;
+        bet.total_fee_amount = total_fee_amount;
+        bet.team_fee_amount = compute_fee_amount(amount, 500)?;
+        bet.dev_fee_amount = compute_fee_amount(amount, 166)?;
+        bet.burn_fee_amount = compute_fee_amount(amount, 167)?;
+        bet.holder_rewards_fee_amount = total_fee_amount
+            .checked_sub(bet.team_fee_amount)
+            .and_then(|v| v.checked_sub(bet.dev_fee_amount))
+            .and_then(|v| v.checked_sub(bet.burn_fee_amount))
+            .ok_or(CoinflipError::MathOverflow)?;
+        bet.total_win_liability = total_win_liability;
         bet.choice = choice;
         bet.asset = ASSET_TOKEN;
         bet.client_seed = client_seed;
@@ -346,7 +387,14 @@ pub mod forge_coinflip {
             player: bet.player,
             nonce,
             amount,
-            payout,
+            player_win_payout: payout,
+            team_fee_amount: bet.team_fee_amount,
+            dev_fee_amount: bet.dev_fee_amount,
+            burn_fee_amount: bet.burn_fee_amount,
+            holder_rewards_fee_amount: bet.holder_rewards_fee_amount,
+            player_win_payout_bps: payout_bps,
+            total_fee_amount,
+            total_win_liability,
             choice,
             client_seed,
             seed_hash: bet.seed_hash,
@@ -371,7 +419,8 @@ pub mod forge_coinflip {
             ctx.accounts.randomness.key(),
             &ctx.accounts.randomness,
         )?;
-        let bet_payout = ctx.accounts.bet.payout;
+        let bet_payout = ctx.accounts.bet.player_win_payout;
+        let bet_liability = ctx.accounts.bet.total_win_liability;
         let bet_amount = ctx.accounts.bet.amount;
         let bet_choice = ctx.accounts.bet.choice;
         let bet_nonce = ctx.accounts.bet.nonce;
@@ -381,7 +430,7 @@ pub mod forge_coinflip {
             .accounts
             .config
             .outstanding_liability
-            .checked_sub(bet_payout as u128)
+            .checked_sub(bet_liability as u128)
             .ok_or(CoinflipError::LiabilityUnderflow)?;
 
         if won {
@@ -417,7 +466,14 @@ pub mod forge_coinflip {
             nonce: bet_nonce,
             asset: ASSET_TOKEN,
             amount: bet_amount,
-            payout: bet_payout,
+            player_win_payout: bet_payout,
+            team_fee_amount: ctx.accounts.bet.team_fee_amount,
+            dev_fee_amount: ctx.accounts.bet.dev_fee_amount,
+            burn_fee_amount: ctx.accounts.bet.burn_fee_amount,
+            holder_rewards_fee_amount: ctx.accounts.bet.holder_rewards_fee_amount,
+            player_win_payout_bps: ctx.accounts.bet.player_win_payout_bps,
+            total_fee_amount: ctx.accounts.bet.total_fee_amount,
+            total_win_liability: bet_liability,
             choice: bet_choice,
             result_bit,
             won,
@@ -430,7 +486,7 @@ pub mod forge_coinflip {
     /// refunded to its player (wager returned, reservation released). Anyone may
     /// call it; funds always go to bet.player.
     pub fn refund_expired_bet(ctx: Context<RefundExpiredBet>) -> Result<()> {
-        let bet_payout = ctx.accounts.bet.payout;
+        let bet_payout = ctx.accounts.bet.total_win_liability;
         let bet_amount = ctx.accounts.bet.amount;
         let deadline_slot = ctx.accounts.bet.settlement_deadline_slot;
         validate_randomness_unresolved_for_refund(&ctx.accounts.bet, &ctx.accounts.randomness)?;
@@ -440,10 +496,7 @@ pub mod forge_coinflip {
         );
 
         let clock = Clock::get()?;
-        require!(
-            clock.slot > deadline_slot,
-            CoinflipError::BetNotExpired
-        );
+        require!(clock.slot > deadline_slot, CoinflipError::BetNotExpired);
 
         {
             let config = &mut ctx.accounts.config;
@@ -546,7 +599,11 @@ pub mod forge_coinflip {
             CoinflipError::BetOutsideLimits
         );
 
-        let payout = compute_payout(amount, config.fee_bps)?;
+        let payout_bps = config.sol_player_win_payout_bps;
+        validate_payout_config(config.fee_bps, payout_bps)?;
+        let total_fee_amount = compute_total_fee(amount, config.fee_bps)?;
+        let payout = compute_player_win_payout(amount, payout_bps)?;
+        let total_win_liability = compute_total_win_liability(payout, total_fee_amount)?;
 
         // Spendable balance excludes the rent reserve (which can never be paid out).
         let vault_ai = ctx.accounts.sol_vault.to_account_info();
@@ -559,7 +616,7 @@ pub mod forge_coinflip {
             .ok_or(CoinflipError::MathOverflow)?;
         let new_liability = config
             .outstanding_liability_sol
-            .checked_add(payout as u128)
+            .checked_add(total_win_liability as u128)
             .ok_or(CoinflipError::MathOverflow)?;
         require!(
             vault_after >= new_liability,
@@ -594,7 +651,17 @@ pub mod forge_coinflip {
         bet.config = config.key();
         bet.player = ctx.accounts.player.key();
         bet.amount = amount;
-        bet.payout = payout;
+        bet.player_win_payout_bps = payout_bps;
+        bet.player_win_payout = payout;
+        bet.total_fee_amount = total_fee_amount;
+        bet.team_fee_amount = compute_fee_amount(amount, 500)?;
+        bet.dev_fee_amount = compute_fee_amount(amount, 300)?;
+        bet.burn_fee_amount = 0;
+        bet.holder_rewards_fee_amount = total_fee_amount
+            .checked_sub(bet.team_fee_amount)
+            .and_then(|v| v.checked_sub(bet.dev_fee_amount))
+            .ok_or(CoinflipError::MathOverflow)?;
+        bet.total_win_liability = total_win_liability;
         bet.choice = choice;
         bet.asset = ASSET_SOL;
         bet.client_seed = client_seed;
@@ -628,7 +695,14 @@ pub mod forge_coinflip {
             player: bet.player,
             nonce,
             amount,
-            payout,
+            player_win_payout: payout,
+            team_fee_amount: bet.team_fee_amount,
+            dev_fee_amount: bet.dev_fee_amount,
+            burn_fee_amount: bet.burn_fee_amount,
+            holder_rewards_fee_amount: bet.holder_rewards_fee_amount,
+            player_win_payout_bps: payout_bps,
+            total_fee_amount,
+            total_win_liability,
             choice,
             client_seed,
             seed_hash: bet.seed_hash,
@@ -651,7 +725,8 @@ pub mod forge_coinflip {
             ctx.accounts.randomness.key(),
             &ctx.accounts.randomness,
         )?;
-        let bet_payout = ctx.accounts.bet.payout;
+        let bet_payout = ctx.accounts.bet.player_win_payout;
+        let bet_liability = ctx.accounts.bet.total_win_liability;
         let bet_amount = ctx.accounts.bet.amount;
         let bet_choice = ctx.accounts.bet.choice;
         let bet_nonce = ctx.accounts.bet.nonce;
@@ -661,7 +736,7 @@ pub mod forge_coinflip {
             .accounts
             .config
             .outstanding_liability_sol
-            .checked_sub(bet_payout as u128)
+            .checked_sub(bet_liability as u128)
             .ok_or(CoinflipError::LiabilityUnderflow)?;
 
         if won {
@@ -693,7 +768,14 @@ pub mod forge_coinflip {
             nonce: bet_nonce,
             asset: ASSET_SOL,
             amount: bet_amount,
-            payout: bet_payout,
+            player_win_payout: bet_payout,
+            team_fee_amount: ctx.accounts.bet.team_fee_amount,
+            dev_fee_amount: ctx.accounts.bet.dev_fee_amount,
+            burn_fee_amount: ctx.accounts.bet.burn_fee_amount,
+            holder_rewards_fee_amount: ctx.accounts.bet.holder_rewards_fee_amount,
+            player_win_payout_bps: ctx.accounts.bet.player_win_payout_bps,
+            total_fee_amount: ctx.accounts.bet.total_fee_amount,
+            total_win_liability: bet_liability,
             choice: bet_choice,
             result_bit,
             won,
@@ -704,7 +786,7 @@ pub mod forge_coinflip {
 
     /// SOL equivalent of refund_expired_bet.
     pub fn refund_expired_bet_sol(ctx: Context<RefundExpiredBetSol>) -> Result<()> {
-        let bet_payout = ctx.accounts.bet.payout;
+        let bet_payout = ctx.accounts.bet.total_win_liability;
         let bet_amount = ctx.accounts.bet.amount;
         let deadline_slot = ctx.accounts.bet.settlement_deadline_slot;
         validate_randomness_unresolved_for_refund(&ctx.accounts.bet, &ctx.accounts.randomness)?;
@@ -714,10 +796,7 @@ pub mod forge_coinflip {
         );
 
         let clock = Clock::get()?;
-        require!(
-            clock.slot > deadline_slot,
-            CoinflipError::BetNotExpired
-        );
+        require!(clock.slot > deadline_slot, CoinflipError::BetNotExpired);
 
         {
             let config = &mut ctx.accounts.config;
@@ -755,21 +834,52 @@ pub mod forge_coinflip {
 // ----------------------------------------------------------------------------
 // Pure helpers
 // ----------------------------------------------------------------------------
-/// payout = amount * 2 * (10_000 - fee_bps) / 10_000, truncated (rounds in the
-/// house's favor). With fee_bps = 200 a 1000-token win pays 1960.
-fn compute_payout(amount: u64, fee_bps: u16) -> Result<u64> {
-    let factor_bps = 2u128
-        .checked_mul(
-            (10_000u128)
-                .checked_sub(fee_bps as u128)
-                .ok_or(CoinflipError::MathOverflow)?,
-        )
-        .ok_or(CoinflipError::MathOverflow)?;
-    let payout = (amount as u128)
-        .checked_mul(factor_bps)
+fn checked_mul_div_floor(amount: u64, numerator_bps: u16, denominator: u64) -> Result<u64> {
+    let value = (amount as u128)
+        .checked_mul(numerator_bps as u128)
         .ok_or(CoinflipError::MathOverflow)?
-        / 10_000u128;
-    u64::try_from(payout).map_err(|_| error!(CoinflipError::MathOverflow))
+        / (denominator as u128);
+    u64::try_from(value).map_err(|_| error!(CoinflipError::MathOverflow))
+}
+
+fn compute_fee_amount(amount: u64, fee_bps: u16) -> Result<u64> {
+    checked_mul_div_floor(amount, fee_bps, 10_000)
+}
+
+fn compute_total_fee(amount: u64, total_fee_bps: u16) -> Result<u64> {
+    let fee = compute_fee_amount(amount, total_fee_bps)?;
+    require!(fee > 0, CoinflipError::DustWager);
+    Ok(fee)
+}
+
+fn compute_player_win_payout(amount: u64, player_win_payout_bps: u16) -> Result<u64> {
+    let payout = checked_mul_div_floor(amount, player_win_payout_bps, 10_000)?;
+    require!(payout > 0, CoinflipError::DustWager);
+    Ok(payout)
+}
+
+fn compute_total_win_liability(player_win_payout: u64, total_fee_amount: u64) -> Result<u64> {
+    player_win_payout
+        .checked_add(total_fee_amount)
+        .ok_or(error!(CoinflipError::MathOverflow))
+}
+
+fn validate_payout_config(total_fee_bps: u16, player_win_payout_bps: u16) -> Result<()> {
+    require!(
+        player_win_payout_bps >= MIN_PLAYER_WIN_PAYOUT_BPS,
+        CoinflipError::InvalidPlayerWinPayoutBps
+    );
+    require!(
+        (player_win_payout_bps as u32) + (total_fee_bps as u32) <= 20_000,
+        CoinflipError::InvalidPlayerWinPayoutBps
+    );
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn compute_expected_vault_edge_bps(total_fee_bps: u16, player_win_payout_bps: u16) -> Result<i32> {
+    validate_payout_config(total_fee_bps, player_win_payout_bps)?;
+    Ok(10_000i32 - total_fee_bps as i32 - (player_win_payout_bps as i32 / 2))
 }
 
 fn expected_switchboard_program_id() -> Pubkey {
@@ -793,12 +903,19 @@ fn parse_switchboard_randomness(randomness: &AccountInfo) -> Result<RandomnessAc
     Ok(*data)
 }
 
-fn validate_randomness_commit(randomness: &AccountInfo, current_slot: u64) -> Result<RandomnessAccountData> {
+fn validate_randomness_commit(
+    randomness: &AccountInfo,
+    current_slot: u64,
+) -> Result<RandomnessAccountData> {
     let randomness_data = parse_switchboard_randomness(randomness)?;
-    require!(randomness_data.seed_slot > 0, CoinflipError::RandomnessNotCommitted);
+    require!(
+        randomness_data.seed_slot > 0,
+        CoinflipError::RandomnessNotCommitted
+    );
     require!(
         randomness_data.seed_slot <= current_slot
-            && current_slot.saturating_sub(randomness_data.seed_slot) <= MAX_RANDOMNESS_COMMIT_AGE_SLOTS,
+            && current_slot.saturating_sub(randomness_data.seed_slot)
+                <= MAX_RANDOMNESS_COMMIT_AGE_SLOTS,
         CoinflipError::RandomnessExpired
     );
     require!(
@@ -863,6 +980,8 @@ pub struct GameConfig {
     pub current_seed_hash: [u8; 32],
     pub seed_epoch: u64,
     pub fee_bps: u16,
+    pub sol_player_win_payout_bps: u16,
+    pub token_player_win_payout_bps: u16,
     pub min_bet: u64,
     pub max_bet: u64,
     pub max_payout_bps_of_treasury: u16,
@@ -893,7 +1012,14 @@ pub struct Bet {
     pub config: Pubkey,
     pub player: Pubkey,
     pub amount: u64,
-    pub payout: u64,
+    pub player_win_payout_bps: u16,
+    pub player_win_payout: u64,
+    pub total_fee_amount: u64,
+    pub team_fee_amount: u64,
+    pub dev_fee_amount: u64,
+    pub burn_fee_amount: u64,
+    pub holder_rewards_fee_amount: u64,
+    pub total_win_liability: u64,
     pub choice: u8,
     pub asset: u8,
     pub client_seed: [u8; 32],
@@ -924,6 +1050,8 @@ pub struct InitializeParams {
     pub settle_authority: Pubkey,
     pub randomness_authority: Pubkey,
     pub fee_bps: u16,
+    pub sol_player_win_payout_bps: u16,
+    pub token_player_win_payout_bps: u16,
     pub min_bet: u64,
     pub max_bet: u64,
     pub max_payout_bps_of_treasury: u16,
@@ -936,6 +1064,8 @@ pub struct InitializeParams {
 pub struct UpdateParams {
     pub settle_authority: Option<Pubkey>,
     pub fee_bps: Option<u16>,
+    pub sol_player_win_payout_bps: Option<u16>,
+    pub token_player_win_payout_bps: Option<u16>,
     pub min_bet: Option<u64>,
     pub max_bet: Option<u64>,
     pub max_payout_bps_of_treasury: Option<u16>,
@@ -1259,7 +1389,14 @@ pub struct BetPlaced {
     pub player: Pubkey,
     pub nonce: u64,
     pub amount: u64,
-    pub payout: u64,
+    pub player_win_payout_bps: u16,
+    pub player_win_payout: u64,
+    pub total_fee_amount: u64,
+    pub team_fee_amount: u64,
+    pub dev_fee_amount: u64,
+    pub burn_fee_amount: u64,
+    pub holder_rewards_fee_amount: u64,
+    pub total_win_liability: u64,
     pub choice: u8,
     pub client_seed: [u8; 32],
     pub seed_hash: [u8; 32],
@@ -1275,7 +1412,14 @@ pub struct BetSettled {
     pub player: Pubkey,
     pub nonce: u64,
     pub amount: u64,
-    pub payout: u64,
+    pub player_win_payout_bps: u16,
+    pub player_win_payout: u64,
+    pub total_fee_amount: u64,
+    pub team_fee_amount: u64,
+    pub dev_fee_amount: u64,
+    pub burn_fee_amount: u64,
+    pub holder_rewards_fee_amount: u64,
+    pub total_win_liability: u64,
     pub choice: u8,
     pub result_bit: u8,
     pub won: bool,
@@ -1352,6 +1496,10 @@ pub enum CoinflipError {
     WrongAsset,
     #[msg("Arithmetic overflow")]
     MathOverflow,
+    #[msg("Invalid player win payout basis points")]
+    InvalidPlayerWinPayoutBps,
+    #[msg("Wager too small after fee/payout rounding")]
+    DustWager,
     #[msg("Randomness account does not match the bet commitment")]
     WrongRandomnessAccount,
     #[msg("Randomness is not ready")]
@@ -1370,7 +1518,6 @@ pub enum CoinflipError {
     RandomnessSeedSlotMismatch,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1378,14 +1525,41 @@ mod tests {
     #[test]
     #[cfg(not(feature = "mainnet"))]
     fn default_build_accepts_only_devnet_switchboard_owner() {
-        assert_eq!(expected_switchboard_program_id(), get_sb_program_id("devnet"));
-        assert_ne!(expected_switchboard_program_id(), get_sb_program_id("mainnet"));
+        assert_eq!(
+            expected_switchboard_program_id(),
+            get_sb_program_id("devnet")
+        );
+        assert_ne!(
+            expected_switchboard_program_id(),
+            get_sb_program_id("mainnet")
+        );
+    }
+
+    #[test]
+    fn default_payout_math_reserves_payout_plus_fee() {
+        let fee = compute_total_fee(10_000, 1_000).unwrap();
+        let payout = compute_player_win_payout(10_000, DEFAULT_PLAYER_WIN_PAYOUT_BPS).unwrap();
+        assert_eq!(payout, 17_800);
+        assert_eq!(compute_total_win_liability(payout, fee).unwrap(), 18_800);
+        assert_eq!(compute_expected_vault_edge_bps(1_000, 17_800).unwrap(), 100);
+    }
+
+    #[test]
+    fn rejects_payout_plus_fee_over_twenty_thousand_bps() {
+        assert!(validate_payout_config(1_000, 19_001).is_err());
+        assert!(validate_payout_config(1_000, 19_000).is_ok());
     }
 
     #[test]
     #[cfg(feature = "mainnet")]
     fn mainnet_build_accepts_only_mainnet_switchboard_owner() {
-        assert_eq!(expected_switchboard_program_id(), get_sb_program_id("mainnet"));
-        assert_ne!(expected_switchboard_program_id(), get_sb_program_id("devnet"));
+        assert_eq!(
+            expected_switchboard_program_id(),
+            get_sb_program_id("mainnet")
+        );
+        assert_ne!(
+            expected_switchboard_program_id(),
+            get_sb_program_id("devnet")
+        );
     }
 }

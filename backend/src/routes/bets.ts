@@ -57,6 +57,14 @@ betsRouter.post("/settle", async (req, res) => {
           nonce: n,
           amount: bet.amount.toString(),
           payout: bet.payout.toString(),
+          playerWinPayoutBps: bet.playerWinPayoutBps,
+          playerWinPayout: bet.playerWinPayout.toString(),
+          totalFeeAmount: bet.totalFeeAmount.toString(),
+          teamFeeAmount: bet.teamFeeAmount.toString(),
+          devFeeAmount: bet.devFeeAmount.toString(),
+          burnFeeAmount: bet.burnFeeAmount.toString(),
+          holderRewardsFeeAmount: bet.holderRewardsFeeAmount.toString(),
+          totalWinLiability: bet.totalWinLiability.toString(),
           choice: bet.choice,
           asset: isSol ? "sol" : "token",
           clientSeedHex: bet.clientSeedHex,
@@ -79,6 +87,14 @@ betsRouter.post("/settle", async (req, res) => {
       status: "submitted",
       asset: isSol ? "sol" : "token",
       payout: bet.payout.toString(),
+      playerWinPayoutBps: bet.playerWinPayoutBps,
+      playerWinPayout: bet.playerWinPayout.toString(),
+      totalFeeAmount: bet.totalFeeAmount.toString(),
+      teamFeeAmount: bet.teamFeeAmount.toString(),
+      devFeeAmount: bet.devFeeAmount.toString(),
+      burnFeeAmount: bet.burnFeeAmount.toString(),
+      holderRewardsFeeAmount: bet.holderRewardsFeeAmount.toString(),
+      totalWinLiability: bet.totalWinLiability.toString(),
       settleTx,
     });
   } catch (e: any) {
@@ -103,7 +119,7 @@ const RECENT_DEFAULT = 50;
 const RECENT_MAX = 100;
 const RECENT_CACHE_MS = 2000;
 // Only public-on-chain fields; "-_id" drops Mongo's internal id from the payload.
-const RECENT_PROJECTION = "player nonce choice asset amount payout won settleTx createdAt -_id";
+const RECENT_PROJECTION = "player nonce choice asset amount payout playerWinPayoutBps playerWinPayout totalFeeAmount teamFeeAmount devFeeAmount burnFeeAmount holderRewardsFeeAmount totalWinLiability won settleTx createdAt -_id";
 
 interface RecentBet {
   player: string;

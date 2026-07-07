@@ -10,6 +10,14 @@ const betSchema = new Schema(
     nonce: { type: Number, required: true },
     amount: { type: String, required: true }, // base units, stored as string (u64-safe)
     payout: { type: String, required: true },
+    playerWinPayoutBps: { type: Number, default: null },
+    playerWinPayout: { type: String, default: null },
+    totalFeeAmount: { type: String, default: null },
+    teamFeeAmount: { type: String, default: null },
+    devFeeAmount: { type: String, default: null },
+    burnFeeAmount: { type: String, default: null },
+    holderRewardsFeeAmount: { type: String, default: null },
+    totalWinLiability: { type: String, default: null },
     choice: { type: Number, required: true }, // 0 heads, 1 tails
     asset: { type: String, enum: ["token", "sol"], default: "token" },
     clientSeedHex: { type: String, required: true },

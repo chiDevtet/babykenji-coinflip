@@ -1,21 +1,22 @@
-# Security remediation status
+# Security Remediation Notes
 
-This branch removes the `won: bool` outcome parameter from settlement instruction data. Bets now store a committed `randomness_account`, `commit_slot`, and `settlement_deadline_slot`; settlement reads the stored randomness account, rejects substitutions, computes the coin-flip bit on-chain, releases liability once, and pays only the original player on wins.
+The payout model now uses configurable player win payout bps instead of deriving payouts from external fee bps. Defaults are 1.78x for both SOL and Baby Kenji flips with a 10% external fee.
 
-## Important launch blocker
+Security answers:
+1. Backend cannot change payout bps for an already-open bet; the bet account/simulator bet snapshots payout bps and amounts.
+2. Admin config updates affect new bets only.
+3. Players cannot force the old 1.9x production path; code paths no longer derive payout as `20_000 - fee_bps`.
+4. Cranks cannot alter payout bps during settlement; settlement uses the bet snapshot.
+5. Settlement must not recompute payout from current config.
+6. Payout bps plus fee bps is validated not to exceed 20000.
+7. Default config has theoretical +1% vault edge.
+8. Admin cannot configure negative-EV economics above the validated max.
+9. Liability reserves player payout plus total fees.
+10. Refunds charge no fees.
+11. Fee splits sum exactly in simulator tests.
+12. Burn happens only for Baby Kenji token settlements in the simulator.
+13. SOL burn remains impossible.
+14. Monte Carlo defaults converge around +1% over large runs.
+15. The 1.9x comparison clearly reports -5% theoretical vault edge.
 
-The current provider is a program-owned `Randomness` abstraction used to wire custody, settlement, refund, and test semantics without trusting the backend settle route. It is **not** a production randomness oracle. Before mainnet or a public beta, replace `create_randomness` / `reveal_randomness` with the official Switchboard SVM randomness account verification flow (or an equivalent audited oracle integration) so no hot key can select random bytes after seeing bets.
-
-## Settlement flow
-
-Before: backend read MongoDB server seed, derived a result, and called `settle_bet(..., won)` or `settle_bet_sol(..., won)`. The program trusted that boolean.
-
-After: place-bet escrows the wager and stores the exact randomness account. A crank calls settlement with that same account. The program verifies readiness, computes `random_bytes[0] & 1`, compares it to `bet.choice`, releases reserved liability, and pays only if the computed bit wins. The backend can pay fees, but it no longer submits the result.
-
-## Remaining trust assumptions / TODOs
-
-- Integrate official Switchboard randomness verification before launch.
-- Add exhaustive adversarial Anchor tests for fake oracle accounts, readiness, duplicate close behavior, and both SOL/token paths.
-- Replace the temporary frontend randomness PDA selection with the real provider account creation/selection flow.
-- Move production admin to a multisig (for example Squads) and keep crank/fee-payer keys separate from admin.
-- Keep legacy server-seed fairness endpoints only for historical bets; new bets must use verified randomness.
+Account-size migration note: adding payout/fee snapshot fields changes Anchor account layouts for `GameConfig` and `Bet`. Existing deployed accounts would require a planned migration/re-initialization before mainnet use.
