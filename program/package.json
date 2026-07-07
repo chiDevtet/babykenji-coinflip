@@ -7,7 +7,8 @@
     "program:build:devnet": "anchor build",
     "program:build:mainnet": "anchor build -- --features mainnet",
     "program:check:devnet": "cd programs/forge-coinflip && cargo check",
-    "program:check:mainnet": "cd programs/forge-coinflip && cargo check --features mainnet"
+    "program:check:mainnet": "cd programs/forge-coinflip && cargo check --features mainnet",
+    "verify:mainnet-build": "ts-node ../scripts/verify-mainnet-build.ts"
   },
   "devDependencies": {
     "@coral-xyz/anchor": "^0.31.1",
