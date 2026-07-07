@@ -41,13 +41,13 @@ const DEMO_ASSETS: Record<Asset, AssetParams> = {
     symbol: TOKEN_SYMBOL,
     decimals: 6,
     balance: 1_000_000_000n, // 1,000 tokens
-    cfg: { feeBps: 200, minBet: 10_000n, maxBet: 100_000_000n, paused: false, seedEpoch: 0n, currentSeedHashHex: "preview", solMinBet: 50_000_000n, solMaxBet: 5_000_000_000n },
+    cfg: { feeBps: 1000, solPlayerWinPayoutBps: 17800, tokenPlayerWinPayoutBps: 17800, minBet: 10_000n, maxBet: 100_000_000n, paused: false, seedEpoch: 0n, currentSeedHashHex: "preview", solMinBet: 50_000_000n, solMaxBet: 5_000_000_000n },
   },
   sol: {
     symbol: "SOL",
     decimals: 9,
     balance: 10_000_000_000n, // 10 SOL
-    cfg: { feeBps: 200, minBet: 50_000_000n, maxBet: 5_000_000_000n, paused: false, seedEpoch: 0n, currentSeedHashHex: "preview", solMinBet: 50_000_000n, solMaxBet: 5_000_000_000n }, // 0.05–5 SOL
+    cfg: { feeBps: 1000, solPlayerWinPayoutBps: 17800, tokenPlayerWinPayoutBps: 17800, minBet: 50_000_000n, maxBet: 5_000_000_000n, paused: false, seedEpoch: 0n, currentSeedHashHex: "preview", solMinBet: 50_000_000n, solMaxBet: 5_000_000_000n }, // 0.05–5 SOL
   },
 };
 const DEMO_COMMITMENT: Commitment = {
@@ -169,8 +169,8 @@ export default function App() {
       await sleep(1100);
       const bit = Math.random() < 0.5 ? 0 : 1;
       const won = bit === choice;
-      const feeBps = effectiveCfg?.feeBps ?? 200;
-      const payout = won ? (amountBase * BigInt(2 * (10000 - feeBps))) / 10000n : 0n;
+      const payoutBps = asset === "sol" ? (effectiveCfg?.solPlayerWinPayoutBps ?? 17800) : (effectiveCfg?.tokenPlayerWinPayoutBps ?? 17800);
+      const payout = won ? (amountBase * BigInt(payoutBps)) / 10000n : 0n;
       setCoinResult(bit === 0 ? "heads" : "tails");
       setSpinning(false);
       setLastResult({ won, label: bit === 0 ? "heads" : "tails", payout: fmtBase(payout, effectiveDecimals) });
@@ -311,8 +311,7 @@ export default function App() {
             <span>Demo mode {demo ? "(flips are simulated)" : "(live flips)"}</span>
           </label>
           <span>
-            House edge {effectiveCfg ? (effectiveCfg.feeBps / 100).toFixed(2) : "—"}% · win pays{" "}
-            {effectiveCfg ? ((2 * (10000 - effectiveCfg.feeBps)) / 10000).toFixed(2) : "—"}× · 18+ · play responsibly
+            Total fee {effectiveCfg ? (effectiveCfg.feeBps / 100).toFixed(2) : "10.00"}% · win pays {effectiveCfg ? (((asset === "sol" ? effectiveCfg.solPlayerWinPayoutBps : effectiveCfg.tokenPlayerWinPayoutBps) ?? 17800) / 10000).toFixed(2) : "1.78"}× · vault reserve edge ≈ {effectiveCfg ? ((10000 - effectiveCfg.feeBps - (((asset === "sol" ? effectiveCfg.solPlayerWinPayoutBps : effectiveCfg.tokenPlayerWinPayoutBps) ?? 17800) / 2)) / 100).toFixed(2) : "1.00"}% · 18+ · play responsibly
           </span>
         </footer>
       </main>

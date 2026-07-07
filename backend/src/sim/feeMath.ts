@@ -1,8 +1,9 @@
 import { FeeBreakdown, FeeConfig } from './types';
 
 export const BPS_DENOMINATOR = 10_000n;
-export const SOL_FEE_CONFIG: FeeConfig = { asset: 'SOL', totalFeeBps: 1000n, teamBps: 500n, devBps: 300n, burnBps: 0n, holderRewardsBps: 200n };
-export const TOKEN_FEE_CONFIG: FeeConfig = { asset: 'BABY_KENJI', totalFeeBps: 1000n, teamBps: 500n, devBps: 166n, burnBps: 167n, holderRewardsBps: 167n };
+export const DEFAULT_PLAYER_WIN_PAYOUT_BPS = 17_800n;
+export const SOL_FEE_CONFIG: FeeConfig = { asset: 'SOL', totalFeeBps: 1000n, teamBps: 500n, devBps: 300n, burnBps: 0n, holderRewardsBps: 200n, playerWinPayoutBps: DEFAULT_PLAYER_WIN_PAYOUT_BPS };
+export const TOKEN_FEE_CONFIG: FeeConfig = { asset: 'BABY_KENJI', totalFeeBps: 1000n, teamBps: 500n, devBps: 166n, burnBps: 167n, holderRewardsBps: 167n, playerWinPayoutBps: DEFAULT_PLAYER_WIN_PAYOUT_BPS };
 
 export function mulDivFloor(amount: bigint, numeratorBps: bigint, denominatorBps: bigint): bigint {
   if (amount < 0n || numeratorBps < 0n || denominatorBps <= 0n) throw new Error('invalid mulDivFloor inputs');
@@ -13,9 +14,18 @@ export function computeTotalFee(amount: bigint, totalFeeBps: bigint): bigint {
   return mulDivFloor(amount, totalFeeBps, BPS_DENOMINATOR);
 }
 
-export function computePlayerWinPayout(amount: bigint, totalFeeBps: bigint): bigint {
-  if (totalFeeBps > 20_000n) throw new Error('totalFeeBps exceeds gross payout bps');
-  return mulDivFloor(amount, 20_000n - totalFeeBps, BPS_DENOMINATOR);
+export function validatePayoutConfig(totalFeeBps: bigint, playerWinPayoutBps: bigint): void {
+  if (playerWinPayoutBps <= 0n) throw new Error('playerWinPayoutBps must be positive');
+  if (playerWinPayoutBps + totalFeeBps > 20_000n) throw new Error('playerWinPayoutBps plus fee exceeds 20000');
+}
+
+export function computePlayerWinPayout(amount: bigint, playerWinPayoutBps: bigint): bigint {
+  validatePayoutConfig(0n, playerWinPayoutBps);
+  return mulDivFloor(amount, playerWinPayoutBps, BPS_DENOMINATOR);
+}
+
+export function computeTheoreticalVaultEdgeBps(totalFeeBps: bigint, playerWinPayoutBps: bigint): bigint {
+  return BPS_DENOMINATOR - totalFeeBps - playerWinPayoutBps / 2n;
 }
 
 export function computeFeeSplit(amount: bigint, config: FeeConfig): FeeBreakdown {
@@ -32,7 +42,8 @@ export function computeFeeSplit(amount: bigint, config: FeeConfig): FeeBreakdown
 }
 
 export function computeTotalWinLiability(amount: bigint, config: FeeConfig): bigint {
-  return computePlayerWinPayout(amount, config.totalFeeBps) + computeTotalFee(amount, config.totalFeeBps);
+  validatePayoutConfig(config.totalFeeBps, config.playerWinPayoutBps);
+  return computePlayerWinPayout(amount, config.playerWinPayoutBps) + computeTotalFee(amount, config.totalFeeBps);
 }
 
 export function assertFeeBreakdownValid(amount: bigint, breakdown: FeeBreakdown, config: FeeConfig): void {

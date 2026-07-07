@@ -12,6 +12,7 @@ export interface FeeConfig {
   devBps: bigint;
   burnBps: bigint;
   holderRewardsBps: bigint;
+  playerWinPayoutBps: bigint;
 }
 
 export interface FeeBreakdown {
@@ -89,6 +90,9 @@ export interface MonteCarloOptions {
   json: boolean;
   csvOut?: string;
   solRentReserve: bigint;
+  solPlayerWinPayoutBps: bigint;
+  tokenPlayerWinPayoutBps: bigint;
+  comparePayouts: boolean;
 }
 
 export interface InvariantViolation {

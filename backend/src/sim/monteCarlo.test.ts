@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { computeFeeSplit, computePlayerWinPayout, computeTotalFee, computeTotalWinLiability, SOL_FEE_CONFIG, TOKEN_FEE_CONFIG } from './feeMath';
+import { computeFeeSplit, computePlayerWinPayout, computeTheoreticalVaultEdgeBps, computeTotalFee, computeTotalWinLiability, SOL_FEE_CONFIG, TOKEN_FEE_CONFIG } from './feeMath';
 import { MonteCarloSimulator, defaultOptions } from './monteCarlo';
 
 test('SOL 100-unit fee split equals 5/3/2 where units allow', () => {
@@ -11,9 +11,15 @@ test('Token fee split equals 5/1.66/1.67/1.67 using bps', () => {
   assert.deepEqual(computeFeeSplit(10_000n, TOKEN_FEE_CONFIG), { total: 1000n, team: 500n, dev: 166n, burn: 167n, holderRewards: 167n });
 });
 
-test('payout and liability are 1.9x and 2.0x', () => {
-  assert.equal(computePlayerWinPayout(10_000n, 1000n), 19_000n);
-  assert.equal(computeTotalWinLiability(10_000n, SOL_FEE_CONFIG), 20_000n);
+test('payout and liability are 1.78x and 1.88x', () => {
+  assert.equal(computePlayerWinPayout(10_000n, 17_800n), 17_800n);
+  assert.equal(computeTotalWinLiability(10_000n, SOL_FEE_CONFIG), 18_800n);
+});
+
+test('theoretical vault edge scenarios', () => {
+  assert.equal(computeTheoreticalVaultEdgeBps(1000n, 19000n), -500n);
+  assert.equal(computeTheoreticalVaultEdgeBps(1000n, 18000n), 0n);
+  assert.equal(computeTheoreticalVaultEdgeBps(1000n, 17800n), 100n);
 });
 
 test('fee split sums exactly and remainder goes to holder rewards', () => {
@@ -49,8 +55,8 @@ test('winning SOL bet pays player and routes fees', () => {
   const sim = new MonteCarloSimulator(defaultOptions({ forcedStreak: 'wins', forcedStreakLength: 10, solBankroll: 100_000n, minSolBet: 100n, maxSolBet: 100n }));
   const before = sim.sol.houseVaultBalance;
   const bet = sim.place(0, 100n, 'SOL'); sim.settle(bet, 0);
-  assert.equal(sim.sol.houseVaultBalance, before - 100n);
-  assert.equal(sim.sol.totalPlayerPayouts, 190n); assert.equal(sim.sol.totalFees, 10n);
+  assert.equal(sim.sol.houseVaultBalance, before - 88n);
+  assert.equal(sim.sol.totalPlayerPayouts, 178n); assert.equal(sim.sol.totalFees, 10n);
 });
 
 test('losing token bet routes fees and burns', () => {
@@ -62,13 +68,13 @@ test('losing token bet routes fees and burns', () => {
 test('winning token bet pays player, routes fees, and burns', () => {
   const sim = new MonteCarloSimulator(defaultOptions({ forcedStreak: 'wins', forcedStreakLength: 10, tokenBankroll: 100_000n, minTokenBet: 10_000n, maxTokenBet: 10_000n }));
   const bet = sim.place(0, 10_000n, 'BABY_KENJI'); sim.settle(bet, 0);
-  assert.equal(sim.token.totalPlayerPayouts, 19_000n); assert.equal(sim.token.burnFees, 167n);
+  assert.equal(sim.token.totalPlayerPayouts, 17_800n); assert.equal(sim.token.burnFees, 167n);
 });
 
 test('outstanding liability increases and releases on settlement/refund', () => {
   const sim = new MonteCarloSimulator(defaultOptions({ solBankroll: 100_000n, minSolBet: 100n, maxSolBet: 100n }));
-  const b1 = sim.place(0, 100n, 'SOL'); assert.equal(sim.sol.outstandingLiability, 200n); sim.settle(b1, 0); assert.equal(sim.sol.outstandingLiability, 0n);
-  const b2 = sim.place(1, 100n, 'SOL'); assert.equal(sim.sol.outstandingLiability, 200n); sim.refund(b2); assert.equal(sim.sol.outstandingLiability, 0n);
+  const b1 = sim.place(0, 100n, 'SOL'); assert.equal(sim.sol.outstandingLiability, 188n); sim.settle(b1, 0); assert.equal(sim.sol.outstandingLiability, 0n);
+  const b2 = sim.place(1, 100n, 'SOL'); assert.equal(sim.sol.outstandingLiability, 188n); sim.refund(b2); assert.equal(sim.sol.outstandingLiability, 0n);
 });
 
 test('duplicate settlement and refund throw', () => {
@@ -80,7 +86,7 @@ test('duplicate settlement and refund throw', () => {
 test('admin withdrawable excludes liability', () => {
   const sim = new MonteCarloSimulator(defaultOptions({ solBankroll: 100_000n, minSolBet: 100n, maxSolBet: 100n }));
   sim.place(0, 100n, 'SOL');
-  assert.equal(sim.withdrawable('SOL'), 99_900n);
+  assert.equal(sim.withdrawable('SOL'), 99_912n);
 });
 
 test('forced 100-win streak does not violate invariants when bankroll is sufficient', () => {
@@ -130,5 +136,5 @@ test('admin withdrawal pressure scenario keeps ending liability zero', () => {
 
 test('total win liability equals payout plus fee for token wagers', () => {
   const amount = 123_456_789n;
-  assert.equal(computeTotalWinLiability(amount, TOKEN_FEE_CONFIG), computePlayerWinPayout(amount, 1000n) + computeTotalFee(amount, 1000n));
+  assert.equal(computeTotalWinLiability(amount, TOKEN_FEE_CONFIG), computePlayerWinPayout(amount, TOKEN_FEE_CONFIG.playerWinPayoutBps) + computeTotalFee(amount, 1000n));
 });

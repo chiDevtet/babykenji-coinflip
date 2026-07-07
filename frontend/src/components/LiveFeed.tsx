@@ -102,7 +102,7 @@ function synthRow(tokenDecimals: number, id: number, agoSec: number): FeedFlip {
   const decimals = isSol ? 9 : tokenDecimals;
   const amount = isSol ? toBase(pick(SOL_UI), 9) : toBase(pick(TOKEN_UI), tokenDecimals);
   const won = Math.random() < 0.5;
-  const payout = won ? (amount * 196n) / 100n : 0n; // ~1.96x — matches the 2% demo edge
+  const payout = won ? (amount * 178n) / 100n : 0n; // 1.78x default payout with a 1% vault reserve edge
   return {
     player: randB58(44),
     nonce: id,

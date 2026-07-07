@@ -62,6 +62,14 @@ export interface DecodedBet {
   player: PublicKey;
   amount: bigint;
   payout: bigint;
+  playerWinPayoutBps: number;
+  playerWinPayout: bigint;
+  totalFeeAmount: bigint;
+  teamFeeAmount: bigint;
+  devFeeAmount: bigint;
+  burnFeeAmount: bigint;
+  holderRewardsFeeAmount: bigint;
+  totalWinLiability: bigint;
   choice: number;
   asset: number; // 0 = token, 1 = sol
   clientSeedHex: string;
@@ -83,18 +91,26 @@ export function decodeBet(data: Buffer): DecodedBet {
     config: new PublicKey(data.subarray(8, 40)),
     player: new PublicKey(data.subarray(40, 72)),
     amount: data.readBigUInt64LE(72),
-    payout: data.readBigUInt64LE(80),
-    choice: data.readUInt8(88),
-    asset: data.readUInt8(89),
-    clientSeedHex: data.subarray(90, 122).toString("hex"),
-    nonce: data.readBigUInt64LE(122),
-    seedHashHex: data.subarray(130, 162).toString("hex"),
-    seedEpoch: data.readBigUInt64LE(162),
-    placedSlot: data.readBigUInt64LE(170),
-    commitSlot: data.readBigUInt64LE(178),
-    settlementDeadlineSlot: data.readBigUInt64LE(186),
-    randomnessAccount: new PublicKey(data.subarray(194, 226)),
-    bump: data.readUInt8(226),
+    payout: data.readBigUInt64LE(82),
+    playerWinPayoutBps: data.readUInt16LE(80),
+    playerWinPayout: data.readBigUInt64LE(82),
+    totalFeeAmount: data.readBigUInt64LE(90),
+    teamFeeAmount: data.readBigUInt64LE(98),
+    devFeeAmount: data.readBigUInt64LE(106),
+    burnFeeAmount: data.readBigUInt64LE(114),
+    holderRewardsFeeAmount: data.readBigUInt64LE(122),
+    totalWinLiability: data.readBigUInt64LE(130),
+    choice: data.readUInt8(138),
+    asset: data.readUInt8(139),
+    clientSeedHex: data.subarray(140, 172).toString("hex"),
+    nonce: data.readBigUInt64LE(172),
+    seedHashHex: data.subarray(180, 212).toString("hex"),
+    seedEpoch: data.readBigUInt64LE(212),
+    placedSlot: data.readBigUInt64LE(220),
+    commitSlot: data.readBigUInt64LE(228),
+    settlementDeadlineSlot: data.readBigUInt64LE(236),
+    randomnessAccount: new PublicKey(data.subarray(244, 276)),
+    bump: data.readUInt8(276),
   };
 }
 
