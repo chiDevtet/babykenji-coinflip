@@ -52,34 +52,147 @@ export interface ConfigView {
   tokenPlayerWinPayoutBps: number;
   minBet: bigint;
   maxBet: bigint;
+  maxPayoutBpsOfTreasury: number;
   paused: boolean;
   seedEpoch: bigint;
   currentSeedHashHex: string;
   solMinBet: bigint;
   solMaxBet: bigint;
+  outstandingLiability: bigint;
+  outstandingLiabilitySol: bigint;
+  treasuryVault: PublicKey;
+  solVault: PublicKey;
 }
 
-// GameConfig offsets: feeBps u16 @176, min_bet u64 @178, max_bet u64 @186,
-// current_seed_hash[32] @136, seed_epoch u64 @168, paused @212,
-// sol_min_bet u64 @285, sol_max_bet u64 @293
+// Native-SOL vault account size: 8 (anchor discriminator) + 1 (bump). Used to
+// exclude the rent-exempt reserve from the SOL treasury's spendable balance,
+// matching the program's own rent handling in place_bet_sol.
+const SOL_VAULT_ACCOUNT_SPACE = 8 + 1;
+
+// Sequential reader over Anchor account data. Fields have no padding and are laid
+// out in declaration order, so walking a cursor keeps the offsets self-consistent
+// with the Rust `GameConfig` struct — far less error-prone than magic offsets.
+class Cursor {
+  private off: number;
+  constructor(private readonly data: Uint8Array, private readonly dv: DataView, start: number) {
+    this.off = start;
+  }
+  skip(n: number): this {
+    this.off += n;
+    return this;
+  }
+  u8(): number {
+    return this.data[this.off++];
+  }
+  u16(): number {
+    const v = this.dv.getUint16(this.off, true);
+    this.off += 2;
+    return v;
+  }
+  u64(): bigint {
+    const v = this.dv.getBigUint64(this.off, true);
+    this.off += 8;
+    return v;
+  }
+  u128(): bigint {
+    const lo = this.dv.getBigUint64(this.off, true);
+    const hi = this.dv.getBigUint64(this.off + 8, true);
+    this.off += 16;
+    return lo + (hi << 64n);
+  }
+  bytes(n: number): Uint8Array {
+    const b = this.data.subarray(this.off, this.off + n);
+    this.off += n;
+    return b;
+  }
+  pubkey(): PublicKey {
+    return new PublicKey(this.bytes(32));
+  }
+}
+
+// Decodes the on-chain GameConfig. The cursor walks the exact Rust field order:
+//   admin, pending_admin, settle_authority, randomness_authority, token_mint,
+//   treasury_vault, sol_team_wallet, sol_dev_buyback_wallet, sol_holder_rewards_wallet,
+//   token_team_fee_account, token_dev_fee_account, token_holder_rewards_account,
+//   current_seed_hash[32], seed_epoch u64, fee_bps u16, sol_player_win_payout_bps u16,
+//   token_player_win_payout_bps u16, min_bet u64, max_bet u64,
+//   max_payout_bps_of_treasury u16, outstanding_liability u128, paused bool,
+//   total_bets u64, total_wagered u128, total_paid_out u128, sol_vault,
+//   sol_min_bet u64, sol_max_bet u64, outstanding_liability_sol u128, bump u8.
 export async function fetchConfigView(connection: Connection): Promise<ConfigView | null> {
   const info = await connection.getAccountInfo(configPda());
   if (!info) return null;
-  const dv = new DataView(info.data.buffer, info.data.byteOffset);
-  const hashBytes = info.data.subarray(200, 232);
-  const hex = Array.from(hashBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const dv = new DataView(info.data.buffer, info.data.byteOffset, info.data.byteLength);
+  const c = new Cursor(info.data, dv, 8); // skip the 8-byte account discriminator
+
+  c.skip(32 * 5); // admin, pending_admin, settle_authority, randomness_authority, token_mint
+  const treasuryVault = c.pubkey();
+  c.skip(32 * 6); // sol_team, sol_dev, sol_holder, token_team, token_dev, token_holder
+  const seedHash = c.bytes(32);
+  const seedEpoch = c.u64();
+  const feeBps = c.u16();
+  const solPlayerWinPayoutBps = c.u16();
+  const tokenPlayerWinPayoutBps = c.u16();
+  const minBet = c.u64();
+  const maxBet = c.u64();
+  const maxPayoutBpsOfTreasury = c.u16();
+  const outstandingLiability = c.u128();
+  const paused = c.u8() === 1;
+  c.skip(8); // total_bets
+  c.skip(16); // total_wagered
+  c.skip(16); // total_paid_out
+  const solVault = c.pubkey();
+  const solMinBet = c.u64();
+  const solMaxBet = c.u64();
+  const outstandingLiabilitySol = c.u128();
+
+  const hex = Array.from(seedHash).map((b) => b.toString(16).padStart(2, "0")).join("");
   return {
-    feeBps: dv.getUint16(240, true),
-    solPlayerWinPayoutBps: dv.getUint16(242, true),
-    tokenPlayerWinPayoutBps: dv.getUint16(244, true),
-    minBet: dv.getBigUint64(246, true),
-    maxBet: dv.getBigUint64(254, true),
-    seedEpoch: dv.getBigUint64(232, true),
+    feeBps,
+    solPlayerWinPayoutBps,
+    tokenPlayerWinPayoutBps,
+    minBet,
+    maxBet,
+    maxPayoutBpsOfTreasury,
+    seedEpoch,
     currentSeedHashHex: hex,
-    paused: info.data[280] === 1,
-    solMinBet: dv.getBigUint64(353, true),
-    solMaxBet: dv.getBigUint64(361, true),
+    paused,
+    solMinBet,
+    solMaxBet,
+    outstandingLiability,
+    outstandingLiabilitySol,
+    treasuryVault,
+    solVault,
   };
+}
+
+export interface VaultBalances {
+  /** Spendable SPL-token treasury balance (base units). */
+  tokenVault: bigint;
+  /** Spendable native-SOL treasury balance (lamports, excluding the rent reserve). */
+  solVaultSpendable: bigint;
+}
+
+// Live house-vault balances, used to derive the treasury-based wager ceiling.
+// Reads the token vault's amount and the SOL vault's lamports minus its rent
+// reserve (which the program can never pay out).
+export async function fetchVaultBalances(connection: Connection, cfg: ConfigView): Promise<VaultBalances> {
+  let tokenVault = 0n;
+  let solVaultSpendable = 0n;
+  try {
+    const bal = await connection.getTokenAccountBalance(cfg.treasuryVault);
+    tokenVault = BigInt(bal.value.amount);
+  } catch {
+    tokenVault = 0n;
+  }
+  try {
+    const lamports = BigInt(await connection.getBalance(cfg.solVault));
+    const rent = BigInt(await connection.getMinimumBalanceForRentExemption(SOL_VAULT_ACCOUNT_SPACE));
+    solVaultSpendable = lamports > rent ? lamports - rent : 0n;
+  } catch {
+    solVaultSpendable = 0n;
+  }
+  return { tokenVault, solVaultSpendable };
 }
 
 // --- place_bet instruction (account order matches the Rust PlaceBet context) ---
