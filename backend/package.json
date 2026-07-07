@@ -15,7 +15,10 @@
     "monte-carlo:token": "npm run monte-carlo -- --asset token",
     "monte-carlo:mixed": "npm run monte-carlo -- --asset mixed",
     "monte-carlo:stress": "npm run monte-carlo -- --scenario mixed-asset-chaos --iterations 100000",
-    "test:monte-carlo": "node --test -r ts-node/register src/sim/monteCarlo.test.ts"
+    "test:monte-carlo": "node --test -r ts-node/register src/sim/monteCarlo.test.ts",
+    "verify:env": "ts-node ../scripts/verify-env.ts",
+    "verify:config": "ts-node ../scripts/verify-config.ts",
+    "print:wallet-matrix": "ts-node ../scripts/print-wallet-matrix.ts"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.9",
