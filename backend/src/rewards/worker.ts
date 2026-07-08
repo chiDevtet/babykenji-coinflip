@@ -51,6 +51,12 @@ export async function markPayoutSent(idempotencyKey: string, signature: string) 
   await RewardPayoutModel.updateOne({ idempotencyKey, status: { $ne: "sent" } }, { $set: { status: "sent", signature, lastError: null }, $inc: { attempts: 1 } });
 }
 
+/** Record a failed send attempt; the distributor retries it on later runs up to
+ *  the configured attempt cap. Never touches rows already marked sent. */
+export async function markPayoutFailed(idempotencyKey: string, error: string) {
+  await RewardPayoutModel.updateOne({ idempotencyKey, status: { $ne: "sent" } }, { $set: { status: "failed", lastError: error.slice(0, 500) }, $inc: { attempts: 1 } });
+}
+
 export async function retryFailedPayouts(cycleId: string) {
   return RewardPayoutModel.updateMany({ cycle: cycleId, status: "failed" }, { $set: { status: "pending", lastError: null } });
 }

@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test -r ts-node/register tests/rewards.test.ts",
+    "test": "node --test -r ts-node/register tests/rewards.test.ts tests/distributor.test.ts",
     "monte-carlo": "node -r ts-node/register src/sim/monteCarlo.ts",
     "monte-carlo:sol": "npm run monte-carlo -- --asset sol",
     "monte-carlo:token": "npm run monte-carlo -- --asset token",
@@ -19,6 +19,8 @@
     "verify:env": "ts-node ../scripts/verify-env.ts",
     "wager:limits": "ts-node scripts/update-wager-limits.ts",
     "wager:limits:execute": "ts-node scripts/update-wager-limits.ts --execute",
+    "distributor": "ts-node src/rewards/distributorMain.ts",
+    "distributor:execute": "ts-node src/rewards/distributorMain.ts --execute",
     "verify:config": "ts-node ../scripts/verify-config.ts",
     "print:wallet-matrix": "ts-node ../scripts/print-wallet-matrix.ts"
   },
