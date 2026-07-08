@@ -1,0 +1,61 @@
+name: Verified Build
+# Reproducible, Docker-pinned build of the forge-coinflip program, compared
+# against the on-chain bytecode hash. Proves anyone can reproduce the deployed
+# binary from this repo. See docs/VERIFIED_BUILD.md.
+#
+# Runs on demand and on release tags (not on every PR — the Docker build is slow
+# and needs no secrets to just PROVE reproducibility of a hash).
+on:
+  workflow_dispatch:
+    inputs:
+      rpc_url:
+        description: Mainnet RPC URL for the on-chain hash comparison
+        required: false
+        default: https://api.mainnet-beta.solana.com
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  verified-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install solana-verify
+        run: |
+          cargo install solana-verify --locked
+          solana-verify --version
+
+      - name: Reproducible build (Docker, --features mainnet)
+        working-directory: program
+        run: |
+          # Determinism inputs are pinned in Cargo.lock (solana-program 2.3.0) and
+          # Cargo.toml (anchor 0.31.1). The mainnet feature MUST be passed or the
+          # hash will not match the deployed binary.
+          solana-verify build --library-name forge_coinflip -- --features mainnet
+
+      - name: Compute local executable hash
+        id: local
+        working-directory: program
+        run: |
+          HASH=$(solana-verify get-executable-hash target/deploy/forge_coinflip.so)
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Local executable hash:  $HASH"
+
+      - name: Fetch on-chain program hash and compare
+        working-directory: program
+        env:
+          RPC_URL: ${{ github.event.inputs.rpc_url || 'https://api.mainnet-beta.solana.com' }}
+        run: |
+          ONCHAIN=$(solana-verify get-program-hash -u "$RPC_URL" DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj)
+          echo "On-chain program hash:  $ONCHAIN"
+          echo "Local executable hash:  ${{ steps.local.outputs.hash }}"
+          if [ "$ONCHAIN" != "${{ steps.local.outputs.hash }}" ]; then
+            echo "::error::Hash mismatch — the repo at this commit does not reproduce the deployed bytecode. See docs/VERIFIED_BUILD.md §'If the hashes DON'T match'."
+            exit 1
+          fi
+          echo "::notice::MATCH — reproducible build equals the deployed program."
