@@ -8,7 +8,7 @@ import {
   buildRefundSolIx,
   sendIxs,
 } from "../solana";
-import { buildRevealIx } from "../switchboard";
+import { buildRevealIx, readResultBit } from "../switchboard";
 import { BetModel } from "../models/Bet";
 import { PlayerModel } from "../models/Player";
 
@@ -18,6 +18,33 @@ const ASSET_SOL = 1;
 
 function parsePlayer(v: unknown): PublicKey {
   return new PublicKey(String(v)); // throws on invalid
+}
+
+const label = (bit: number | null): "heads" | "tails" | null => (bit === 0 ? "heads" : bit === 1 ? "tails" : null);
+
+// Pull program/Switchboard logs off whatever the send path threw, so /settle can
+// return the real cause instead of a generic "settlement failed".
+function errLogs(e: any): string[] | undefined {
+  if (Array.isArray(e?.logs)) return e.logs;
+  if (typeof e?.getLogs === "function") {
+    try {
+      return e.getLogs();
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+// Read the result bit after the reveal+settle lands. The reveal writes the value in
+// the same (now-finalized) transaction, so a couple of short retries cover RPC lag.
+async function resolveResultBit(randomness: PublicKey): Promise<number | null> {
+  for (let i = 0; i < 3; i++) {
+    const bit = await readResultBit(randomness);
+    if (bit !== null) return bit;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
 }
 
 /**
@@ -33,22 +60,53 @@ betsRouter.post("/settle", async (req, res) => {
     if (player === undefined || nonce === undefined) {
       return res.status(400).json({ error: "player and nonce are required" });
     }
-    const playerPk = parsePlayer(player);
+    let playerPk: PublicKey;
+    try {
+      playerPk = parsePlayer(player);
+    } catch {
+      return res.status(400).json({ error: "invalid player pubkey" });
+    }
     const n = Number(nonce);
     if (!Number.isInteger(n) || n < 0) return res.status(400).json({ error: "invalid nonce" });
 
-    // Source of truth: the on-chain bet. If it's gone, it was already settled/refunded.
+    // Source of truth: the on-chain bet. The Bet PDA is closed on settle, so if it's
+    // gone the bet was already settled/refunded — treat /settle as idempotent and
+    // return success (with the mirrored result if we have it) rather than a 404, so a
+    // client retry after a dropped response doesn't surface as an error.
     const bet = await fetchBet(playerPk, n);
-    if (!bet) return res.status(404).json({ error: "bet not found (already settled or never placed)" });
+    if (!bet) {
+      const prior: any = await BetModel.findOne({ player: playerPk.toBase58(), nonce: n }).lean();
+      if (prior && prior.status === "settled") {
+        return res.json({
+          status: "settled",
+          alreadySettled: true,
+          asset: prior.asset,
+          won: prior.won,
+          resultBit: prior.resultBit,
+          resultLabel: label(prior.resultBit),
+          payout: prior.won ? (prior.playerWinPayout ?? prior.payout) : "0",
+          settleTx: prior.settleTx ?? null,
+        });
+      }
+      return res.json({ status: "settled", alreadySettled: true, player: playerPk.toBase58(), nonce: n });
+    }
     if (!bet.player.equals(playerPk)) return res.status(400).json({ error: "player mismatch" });
 
-    // Outcome authority removed: the program reads the stored randomness account and computes win/loss on-chain.
+    // Outcome authority removed: the program reads the stored randomness account and
+    // computes win/loss on-chain. Reveal + settle ride in one tx so the value's
+    // reveal_slot equals the slot settle_bet's get_value() reads.
     const isSol = bet.asset === ASSET_SOL;
     const settleIx = isSol ? buildSettleSolIx(bet) : buildSettleIx(bet);
     const revealIx = await buildRevealIx(bet.randomnessAccount);
     const settleTx = await sendIxs([revealIx, settleIx]);
 
-    // Mirror to Mongo for history (never the source of truth).
+    // Recompute the outcome from the now-revealed value (result_bit = value[0] & 1).
+    const resultBit = await resolveResultBit(bet.randomnessAccount);
+    const won = resultBit !== null && resultBit === bet.choice;
+    const actualPayout = won ? bet.playerWinPayout.toString() : "0";
+
+    // Mirror to Mongo for history (never the source of truth). resultBit/won are
+    // required by the schema, so they must be derived above before this upsert.
     await BetModel.updateOne(
       { player: playerPk.toBase58(), nonce: n },
       {
@@ -56,7 +114,7 @@ betsRouter.post("/settle", async (req, res) => {
           player: playerPk.toBase58(),
           nonce: n,
           amount: bet.amount.toString(),
-          payout: bet.payout.toString(),
+          payout: actualPayout,
           playerWinPayoutBps: bet.playerWinPayoutBps,
           playerWinPayout: bet.playerWinPayout.toString(),
           totalFeeAmount: bet.totalFeeAmount.toString(),
@@ -70,6 +128,8 @@ betsRouter.post("/settle", async (req, res) => {
           clientSeedHex: bet.clientSeedHex,
           seedHashHex: bet.seedHashHex,
           seedEpoch: Number(bet.seedEpoch),
+          resultBit: resultBit ?? -1,
+          won,
           randomnessAccount: bet.randomnessAccount.toBase58(),
           settleTx,
           status: "settled",
@@ -84,9 +144,12 @@ betsRouter.post("/settle", async (req, res) => {
     );
 
     res.json({
-      status: "submitted",
+      status: "settled",
       asset: isSol ? "sol" : "token",
-      payout: bet.payout.toString(),
+      won,
+      resultBit,
+      resultLabel: label(resultBit),
+      payout: actualPayout,
       playerWinPayoutBps: bet.playerWinPayoutBps,
       playerWinPayout: bet.playerWinPayout.toString(),
       totalFeeAmount: bet.totalFeeAmount.toString(),
@@ -98,7 +161,12 @@ betsRouter.post("/settle", async (req, res) => {
       settleTx,
     });
   } catch (e: any) {
-    res.status(500).json({ error: "settlement failed" });
+    const logs = errLogs(e);
+    console.error("[settle] failed:", e?.message ?? e);
+    if (logs?.length) console.error("[settle] program logs:\n" + logs.join("\n"));
+    // Surface the real program/Switchboard error (public on-chain info) instead of a
+    // generic message, so the frontend and operator can see what actually failed.
+    res.status(500).json({ error: e?.message ?? "settlement failed", logs });
   }
 });
 
