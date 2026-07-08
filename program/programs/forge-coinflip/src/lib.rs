@@ -5,9 +5,11 @@ use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 use switchboard_on_demand::accounts::RandomnessAccountData;
 use switchboard_on_demand::get_sb_program_id;
 
-// IMPORTANT: placeholder program id. After `anchor build`, run `anchor keys sync`
-// (or `anchor keys list`) and replace this with the real key, then rebuild.
-declare_id!("9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH");
+// Live mainnet program id (the deployed GameConfig for the $BABYK mint lives
+// under this program). Must stay in sync with program/Anchor.toml, backend
+// PROGRAM_ID, and frontend VITE_PROGRAM_ID. Any upgrade must be built with this
+// exact id or the deployed PDAs become unreachable.
+declare_id!("DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj");
 
 // ----------------------------------------------------------------------------
 // Constants

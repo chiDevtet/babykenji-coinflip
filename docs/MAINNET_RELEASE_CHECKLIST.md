@@ -84,7 +84,7 @@ Every unchecked item is a hard gate.
 ## Closed Program ID Recovery Checklist
 
 - [ ] Old closed program id `DmHi2MW2ibqqGMAgg3EtumHTaguKbydSnszAHiGUf3WA` is not used in production config.
-- [ ] Fresh program id `9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH` is synced in `declare_id!`, `program/Anchor.toml`, backend `PROGRAM_ID`, and frontend `VITE_PROGRAM_ID`.
-- [ ] New `GameConfig`, SOL vault PDA, token treasury vault, PlayerState PDAs, and Bet PDAs are initialized/funded under the fresh program id.
+- [ ] Live program id `DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj` is synced in `declare_id!`, `program/Anchor.toml`, backend `PROGRAM_ID`, and frontend `VITE_PROGRAM_ID`. (The interim recovery id `9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH` was never deployed to any cluster and must not be used.)
+- [ ] `GameConfig`, SOL vault PDA, token treasury vault, PlayerState PDAs, and Bet PDAs are initialized/funded under the live program id.
 - [ ] `npx ts-node scripts/verify-no-old-program-id.ts` passes; the old id appears only in migration/recovery notes.
 - [ ] Devnet smoke passes before any mainnet deployment attempt.

@@ -17,6 +17,8 @@
     "monte-carlo:stress": "npm run monte-carlo -- --scenario mixed-asset-chaos --iterations 100000",
     "test:monte-carlo": "node --test -r ts-node/register src/sim/monteCarlo.test.ts",
     "verify:env": "ts-node ../scripts/verify-env.ts",
+    "wager:limits": "ts-node scripts/update-wager-limits.ts",
+    "wager:limits:execute": "ts-node scripts/update-wager-limits.ts --execute",
     "verify:config": "ts-node ../scripts/verify-config.ts",
     "print:wallet-matrix": "ts-node ../scripts/print-wallet-matrix.ts"
   },
