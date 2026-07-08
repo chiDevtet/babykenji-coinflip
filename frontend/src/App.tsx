@@ -6,7 +6,7 @@ import { getMint, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { TOKEN_MINT, CONFIGURED, type Asset } from "./lib/constants";
 import { fetchConfigView, fetchPlayerNonce, fetchVaultBalances, type ConfigView } from "./lib/anchorIx";
 import { computeMaxWager, isHouseFunded } from "./lib/wager";
-import { getCommitment, preparePlaceBet, settleBet, type Commitment } from "./lib/api";
+import { preparePlaceBet, settleBet } from "./lib/api";
 import WalletBar from "./components/WalletBar";
 import CoinFlip from "./components/CoinFlip";
 import BetPanel from "./components/BetPanel";
@@ -144,12 +144,6 @@ const DEMO_ASSETS: Record<Asset, AssetParams> = {
 // House vault balances (base units) large enough that the treasury cap never
 // binds in demo — preview should always be flippable.
 const DEMO_VAULT_BALANCE = 1_000_000_000_000_000n;
-const DEMO_COMMITMENT: Commitment = {
-  epoch: 0,
-  commitHashHex: "demo".repeat(16).slice(0, 64),
-  onchainSeedHashHex: null,
-  inSync: null,
-};
 
 export default function App() {
   const { connection } = useConnection();
@@ -160,7 +154,6 @@ export default function App() {
 
   const [decimals, setDecimals] = useState(9);
   const [cfg, setCfg] = useState<ConfigView | null>(null);
-  const [commitment, setCommitment] = useState<Commitment | null>(null);
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [solLamports, setSolLamports] = useState<bigint>(0n);
@@ -210,11 +203,6 @@ export default function App() {
       } catch (e) {
         console.warn("could not load config", e);
       }
-      try {
-        setCommitment(await getCommitment());
-      } catch (e) {
-        console.warn("could not load commitment", e);
-      }
     })();
   }, [connection]);
 
@@ -261,7 +249,6 @@ export default function App() {
   const effectiveBalance = demo ? DEMO_ASSETS[asset].balance : asset === "sol" ? solLamports : tokenBase;
   const effectiveConnected = demo ? true : connected;
   const currentSymbol = asset === "sol" ? "SOL" : TOKEN_SYMBOL;
-  const commitmentForPanel = commitment ?? (demo ? DEMO_COMMITMENT : null);
 
   // The live MAX must reflect BOTH the configured max_bet AND the treasury-based
   // per-bet cap (payout <= vault_after * max_payout_bps / 10_000) + solvency. With
@@ -458,10 +445,8 @@ export default function App() {
         />
 
         <FairnessPanel
-          commitment={commitmentForPanel}
           clientSeedHex={toHex(clientSeed)}
           nonce={nonce}
-          player={publicKey ? publicKey.toBase58() : demo ? DEMO_PLAYER : null}
           onRegenerate={() => setClientSeed(randomSeed())}
           busy={busy}
         />

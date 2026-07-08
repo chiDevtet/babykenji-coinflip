@@ -1,40 +1,21 @@
 import { useState } from "react";
-import { verifyBet, type Commitment } from "../lib/api";
+
+// Fairness explainer for the Switchboard verified-randomness model. The old
+// commit-reveal (server seed epoch/hash + HMAC verifier) UI described a system
+// that no longer decides outcomes — results are computed on-chain from a
+// Switchboard On-Demand randomness account — so showing its stale commitment
+// (and a scary mismatch warning) only confused players. This panel documents
+// the real flow and points verifiers at the settle transaction itself.
 
 interface Props {
-  commitment: Commitment | null;
   clientSeedHex: string;
   nonce: bigint;
-  player: string | null;
   onRegenerate: () => void;
   busy: boolean;
 }
 
-export default function FairnessPanel({ commitment, clientSeedHex, nonce, player, onRegenerate, busy }: Props) {
+export default function FairnessPanel({ clientSeedHex, nonce, onRegenerate, busy }: Props) {
   const [open, setOpen] = useState(false);
-  const [serverSeed, setServerSeed] = useState("");
-  const [vNonce, setVNonce] = useState("");
-  const [vChoice, setVChoice] = useState("0");
-  const [vOut, setVOut] = useState<string | null>(null);
-
-  async function runVerify() {
-    if (!player) return;
-    try {
-      const res = await verifyBet({
-        serverSeedHex: serverSeed || undefined,
-        epoch: serverSeed ? undefined : commitment?.epoch,
-        player,
-        clientSeedHex,
-        nonce: Number(vNonce || nonce.toString()),
-        choice: Number(vChoice),
-      });
-      setVOut(
-        `commitment ${res.commitmentValid ? "VALID ✓" : "INVALID ✗"} · result ${res.resultLabel} · ${res.won ? "win" : "lose"}`
-      );
-    } catch (e: any) {
-      setVOut(`error: ${e.message}`);
-    }
-  }
 
   return (
     <div className="panel fairness-panel">
@@ -44,15 +25,8 @@ export default function FairnessPanel({ commitment, clientSeedHex, nonce, player
       </button>
 
       <div className="fairness-summary">
-        <Row label="Epoch" value={commitment ? `#${commitment.epoch}` : "…"} />
-        <Row
-          label="Server seed hash"
-          value={commitment ? short(commitment.commitHashHex) : "…"}
-          title={commitment?.commitHashHex}
-        />
-        {commitment && commitment.inSync === false && (
-          <div className="warn small">⚠ backend commitment differs from on-chain hash</div>
-        )}
+        <Row label="Randomness" value="Switchboard On-Demand (oracle-verified)" />
+        <Row label="Outcome" value="computed on-chain by the program" />
         <Row label="Your client seed" value={short(clientSeedHex)} title={clientSeedHex} />
         <Row label="Next nonce" value={nonce.toString()} />
         <button className="link-btn" onClick={onRegenerate} disabled={busy}>
@@ -63,21 +37,18 @@ export default function FairnessPanel({ commitment, clientSeedHex, nonce, player
       {open && (
         <div className="verify-box">
           <p className="muted small">
-            Each result = HMAC-SHA256(serverSeed, <code>player:clientSeed:nonce</code>) → first bit. After an epoch
-            rotates, its server seed is revealed and every result under it can be recomputed below.
+            Your FLIP transaction creates and commits a fresh Switchboard randomness account in the
+            same transaction as the bet — the program rejects any randomness that could already be
+            known, so the result is undetermined when you bet. At settlement a decentralized oracle
+            reveals the value and the on-chain program computes heads or tails from its first bit;
+            neither the house nor the backend can choose or alter the outcome.
           </p>
-          <div className="verify-grid">
-            <input placeholder="revealed server seed (hex, optional)" value={serverSeed} onChange={(e) => setServerSeed(e.target.value)} />
-            <input placeholder="nonce" value={vNonce} onChange={(e) => setVNonce(e.target.value)} />
-            <select value={vChoice} onChange={(e) => setVChoice(e.target.value)}>
-              <option value="0">heads</option>
-              <option value="1">tails</option>
-            </select>
-            <button className="link-btn" onClick={runVerify} disabled={!player}>
-              verify
-            </button>
-          </div>
-          {vOut && <div className="verify-out">{vOut}</div>}
+          <p className="muted small">
+            To verify any flip, open its transaction from Live Flips (↗) and inspect the Switchboard
+            reveal and the program's settle instruction — the randomness account, the revealed value,
+            and the payout are all public on-chain. Your client seed and nonce are recorded on the
+            bet account as part of that public record.
+          </p>
         </div>
       )}
     </div>
