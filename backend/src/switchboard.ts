@@ -70,6 +70,23 @@ function seedSlotOf(data: any): number {
   return typeof s.toNumber === "function" ? s.toNumber() : Number(s);
 }
 
+// Wait until the randomness account is visible AND owned by the on-demand program.
+// Right after place_bet confirms, a lagging RPC node can still return the account
+// as missing/system-owned, which makes the reveal fail with AccountOwnedByWrongProgram
+// (0xbbf). Poll until it has propagated so we don't reveal against a stale view.
+async function waitForRandomnessOwned(pubkey: PublicKey): Promise<void> {
+  const deadline = Date.now() + REVEALABLE_MAX_WAIT_MS;
+  for (;;) {
+    const info = await connection.getAccountInfo(pubkey, "confirmed");
+    if (info && info.owner.equals(config.switchboardProgramId)) return;
+    if (Date.now() > deadline) {
+      console.warn(`[settle] randomness ${pubkey.toBase58()} not yet owned by switchboard on this node; proceeding`);
+      return;
+    }
+    await sleep(400);
+  }
+}
+
 // Wait until the committed randomness is resolvable on-chain. Per
 // RandomnessAccountData::is_revealable, the oracle can only reveal once the cluster
 // has advanced past seed_slot (seed_slot < current_slot). Returns quietly on
@@ -104,6 +121,7 @@ async function waitUntilRevealable(randomness: any): Promise<void> {
 export async function buildRevealIx(randomnessAccount: PublicKey): Promise<TransactionInstruction> {
   const sbProgram = await loadSbProgram();
   const randomness = new sb.Randomness(sbProgram, randomnessAccount);
+  await waitForRandomnessOwned(randomnessAccount);
   await waitUntilRevealable(randomness);
 
   const payer = config.settleAuthority.publicKey;
