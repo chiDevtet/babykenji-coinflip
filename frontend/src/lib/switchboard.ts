@@ -19,7 +19,13 @@ export interface SwitchboardRandomnessHandle {
 
 export async function createCommittedRandomness(connection: Connection, payer: PublicKey): Promise<SwitchboardRandomnessHandle> {
   const provider = { connection, publicKey: payer } as any;
-  const sbProgram = await sb.AnchorUtils.loadProgramFromConnection(connection, provider);
+  // Pin the Switchboard On-Demand program id explicitly instead of letting the SDK
+  // auto-detect it from the cluster. The randomness account this creates is OWNED by
+  // this program, and the on-chain forge program rejects the bet unless that owner
+  // matches its own `expected_switchboard_program_id()` (InvalidRandomnessOwner /
+  // 0x1789). SWITCHBOARD_PROGRAM_ID and SWITCHBOARD_QUEUE MUST be the same on-demand
+  // deployment the forge program was built against, on the same cluster.
+  const sbProgram = await sb.AnchorUtils.loadProgramFromConnection(connection, provider, SWITCHBOARD_PROGRAM_ID);
   const keypair = Keypair.generate();
   // `Randomness.create` builds the init instruction only — the account is NOT on
   // chain until the transaction that carries `createIx` is sent and confirmed.

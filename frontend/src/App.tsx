@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction } from "@solana/web3.js";
+import { PublicKey, Transaction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import type { Connection, TransactionInstruction } from "@solana/web3.js";
 import { createCommittedRandomness } from "./lib/switchboard";
 import { getMint, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { TOKEN_MINT, CONFIGURED, type Asset } from "./lib/constants";
@@ -33,6 +34,74 @@ function fmtBase(base: bigint, decimals: number): string {
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Pull a human-readable AnchorError out of raw program logs, e.g.
+// "AnchorError thrown in ...:977. Error Code: InvalidRandomnessOwner. Error Number: 6025.
+//  Error Message: Randomness account owner is not the Switchboard On-Demand program."
+// Wallets collapse on-chain reverts to "Internal error", so the logs are the only
+// place the true cause survives.
+function extractAnchorError(logs: string[] | null | undefined): string | null {
+  if (!logs) return null;
+  for (const line of logs) {
+    const m = line.match(/Error Code: (\w+)\. Error Number: (\d+)\. Error Message: (.+?)\.?$/);
+    if (m) return `${m[3]} (${m[1]} / #${m[2]})`;
+    const c = line.match(/failed: custom program error: (0x[0-9a-fA-F]+)/);
+    if (c) return `program error ${c[1]}`;
+  }
+  return null;
+}
+
+// Simulate the assembled flip transaction and surface the REAL program error
+// before it ever reaches the wallet. `place_bet` is a client-side transaction, so
+// a revert never reaches the backend and the wallet only reports a masked
+// "Internal error". We compile a v0 message (a legacy Transaction + a config
+// object trips web3's deprecated `simulateTransaction` overload) and simulate with
+// `sigVerify:false` so no signatures are required. Returns a friendly error
+// string when the sim reverts, or null when it passes / can't be run.
+async function simulateFlip(
+  connection: Connection,
+  payer: PublicKey,
+  ixs: TransactionInstruction[],
+  blockhash: string
+): Promise<string | null> {
+  try {
+    const msg = new TransactionMessage({ payerKey: payer, recentBlockhash: blockhash, instructions: ixs }).compileToV0Message();
+    const sim = await connection.simulateTransaction(new VersionedTransaction(msg), {
+      sigVerify: false,
+      replaceRecentBlockhash: true,
+      commitment: "processed",
+    });
+    if (sim.value.err) {
+      console.error("[flip] simulateTransaction err:", JSON.stringify(sim.value.err));
+      console.error("[flip] program logs:\n" + (sim.value.logs ?? []).join("\n"));
+      return extractAnchorError(sim.value.logs) ?? `simulation reverted: ${JSON.stringify(sim.value.err)}`;
+    }
+    console.log("[flip] simulation OK — compute units:", sim.value.unitsConsumed);
+    return null;
+  } catch (e) {
+    // A flaky/unavailable sim endpoint must not block a real send; log and proceed.
+    console.warn("[flip] simulateTransaction could not run (continuing to send):", e);
+    return null;
+  }
+}
+
+// Unwrap whatever the wallet adapter throws so the underlying program logs aren't
+// swallowed. WalletSendTransactionError hides them behind "Internal error"; the
+// real logs live on `.logs`, a `getLogs()` method, `.cause`, or a nested error.
+function describeSendError(e: any): string {
+  const logs: string[] | undefined = e?.logs ?? (typeof e?.getLogs === "function" ? safeGetLogs(e) : undefined);
+  if (logs?.length) console.error("[flip] sendTransaction program logs:\n" + logs.join("\n"));
+  if (e?.cause) console.error("[flip] sendTransaction cause:", e.cause);
+  console.error("[flip] sendTransaction error:", e?.message ?? e);
+  return extractAnchorError(logs) ?? e?.message ?? "transaction failed";
+}
+function safeGetLogs(e: any): string[] | undefined {
+  try {
+    return e.getLogs();
+  } catch {
+    return undefined;
+  }
+}
 
 // Per-asset stand-ins used in preview/demo so the UI is fully interactive without
 // a deployed program. Both $BABYK and SOL use 9 decimals (matching the real mint).
@@ -268,12 +337,30 @@ export default function App() {
             ? buildPlaceBetSolIx(publicKey, amountBase, choice, clientSeed, currentNonce, sbRandomness.keypair.publicKey)
             : buildPlaceBetIx(publicKey, amountBase, choice, clientSeed, currentNonce, sbRandomness.keypair.publicKey);
 
-        const tx = new Transaction().add(sbRandomness.createIx, sbRandomness.commitIx, placeIx);
+        // Switchboard randomness create + commit + place_bet ride in ONE signed
+        // transaction, so the commit and place_bet execute in the same slot. That
+        // keeps them inside the program's MAX_RANDOMNESS_COMMIT_AGE_SLOTS window
+        // (seed_slot == current_slot-1, so current_slot - seed_slot == 1 <= 2) with
+        // the value still unrevealed — exactly what validate_randomness_commit wants.
+        const ixs = [sbRandomness.createIx, sbRandomness.commitIx, placeIx];
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+
+        // Surface the real on-chain error before the wallet masks it as "Internal
+        // error". If the tx reverts in simulation, abort with the decoded AnchorError
+        // instead of prompting for a signature on a doomed transaction.
+        const simError = await simulateFlip(connection, publicKey, ixs, blockhash);
+        if (simError) throw new Error(simError);
+
+        const tx = new Transaction().add(...ixs);
         tx.recentBlockhash = blockhash;
         tx.feePayer = publicKey;
 
-        const sig = await sendTransaction(tx, connection, { signers: [sbRandomness.keypair] });
+        let sig: string;
+        try {
+          sig = await sendTransaction(tx, connection, { signers: [sbRandomness.keypair] });
+        } catch (sendErr) {
+          throw new Error(describeSendError(sendErr));
+        }
         await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
 
         // Backend reads the asset off-chain from the Bet PDA and settles with the
