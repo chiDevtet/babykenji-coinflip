@@ -63,6 +63,37 @@ async function resolveResultBit(randomness: PublicKey): Promise<number | null> {
   return null;
 }
 
+const SETTLE_SEND_ATTEMPTS = Number(process.env.SETTLE_SEND_ATTEMPTS ?? 4);
+const SETTLE_SEND_DELAY_MS = Number(process.env.SETTLE_SEND_DELAY_MS ?? 1500);
+
+// Right after place_bet confirms, a lagging RPC node can still see the randomness
+// account as missing/system-owned, so the reveal preflight fails with
+// AccountOwnedByWrongProgram (0xbbf) or the tx blockhash goes stale. These are
+// transient — the account exists, the node just hasn't caught up — so retry.
+function isTransientSettleError(e: any): boolean {
+  const hay = [e?.message, ...(errLogs(e) ?? [])].join(" ");
+  return /AccountOwnedByWrongProgram|0xbbf|could not find account|AccountNotFound|Blockhash not found|node is behind|BlockhashNotFound/i.test(hay);
+}
+
+// Build the reveal fresh (new oracle value + blockhash) and send reveal+settle,
+// retrying only on the transient propagation errors above.
+async function revealAndSettle(randomness: PublicKey, settleIx: any): Promise<string> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= SETTLE_SEND_ATTEMPTS; attempt++) {
+    try {
+      const revealIx = await buildRevealIx(randomness);
+      return await sendIxs([revealIx, settleIx]);
+    } catch (e: any) {
+      lastErr = e;
+      const transient = isTransientSettleError(e);
+      console.warn(`[settle] reveal+settle attempt ${attempt}/${SETTLE_SEND_ATTEMPTS} failed (transient=${transient}): ${e?.message ?? e}`);
+      if (!transient || attempt === SETTLE_SEND_ATTEMPTS) throw e;
+      await new Promise((r) => setTimeout(r, SETTLE_SEND_DELAY_MS));
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Prepare a flip: create + commit a Switchboard randomness account whose authority
  * is the settle authority, build the matching place_bet(_sol) instruction, and
@@ -179,8 +210,7 @@ betsRouter.post("/settle", async (req, res) => {
     // reveal_slot equals the slot settle_bet's get_value() reads.
     const isSol = bet.asset === ASSET_SOL;
     const settleIx = isSol ? buildSettleSolIx(bet) : buildSettleIx(bet);
-    const revealIx = await buildRevealIx(bet.randomnessAccount);
-    const settleTx = await sendIxs([revealIx, settleIx]);
+    const settleTx = await revealAndSettle(bet.randomnessAccount, settleIx);
 
     // Recompute the outcome from the now-revealed value (result_bit = value[0] & 1).
     const resultBit = await resolveResultBit(bet.randomnessAccount);
