@@ -378,7 +378,11 @@ export default function App() {
         setLastResult({
           won: result.won,
           label: result.resultLabel ?? "",
-          payout: fmtBase(BigInt(result.payout), payoutDecimals),
+          // Defensive: never feed BigInt a missing field — WebKit throws
+          // "Invalid argument type in ToBigInt operation" on BigInt(undefined),
+          // which crashed the flip UI when a degenerate /settle response
+          // omitted payout.
+          payout: fmtBase(BigInt(result.payout ?? "0"), payoutDecimals),
         });
 
         setClientSeed(randomSeed());

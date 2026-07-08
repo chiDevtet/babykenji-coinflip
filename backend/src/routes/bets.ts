@@ -184,10 +184,14 @@ betsRouter.post("/settle", async (req, res) => {
     if (!Number.isInteger(n) || n < 0) return res.status(400).json({ error: "invalid nonce" });
 
     // Source of truth: the on-chain bet. The Bet PDA is closed on settle, so if it's
-    // gone the bet was already settled/refunded — treat /settle as idempotent and
-    // return success (with the mirrored result if we have it) rather than a 404, so a
-    // client retry after a dropped response doesn't surface as an error.
-    const bet = await fetchBet(playerPk, n);
+    // gone AND our mirror has the result, this is a client retry after a dropped
+    // response — answer idempotently from the mirror. If the mirror has nothing,
+    // the far more likely story is RPC propagation: the frontend confirmed
+    // place_bet against ITS node and this backend's node hasn't caught up yet, so
+    // poll briefly before concluding anything. Never claim "settled" without a
+    // result — that used to return a payload with no payout/result fields, which
+    // crashed the UI (BigInt(undefined)) and left the bet unsettled.
+    let bet = await fetchBet(playerPk, n);
     if (!bet) {
       const prior: any = await BetModel.findOne({ player: playerPk.toBase58(), nonce: n }).lean();
       if (prior && prior.status === "settled") {
@@ -202,7 +206,18 @@ betsRouter.post("/settle", async (req, res) => {
           settleTx: prior.settleTx ?? null,
         });
       }
-      return res.json({ status: "settled", alreadySettled: true, player: playerPk.toBase58(), nonce: n });
+      for (let i = 0; i < 6 && !bet; i++) {
+        await new Promise((r) => setTimeout(r, 800));
+        bet = await fetchBet(playerPk, n);
+      }
+      if (!bet) {
+        return res.status(409).json({
+          error: "bet not visible on-chain yet — retry in a moment",
+          retryable: true,
+          player: playerPk.toBase58(),
+          nonce: n,
+        });
+      }
     }
     if (!bet.player.equals(playerPk)) return res.status(400).json({ error: "player mismatch" });
 

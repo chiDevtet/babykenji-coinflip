@@ -49,14 +49,24 @@ export async function getCommitment(): Promise<Commitment> {
 }
 
 export async function settleBet(player: string, nonce: number): Promise<SettleResult> {
-  const r = await fetch(`${BACKEND_URL}/api/bets/settle`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ player, nonce }),
-  });
-  const data = await r.json();
-  if (!r.ok) throw new Error(data.error || "settlement failed");
-  return data as SettleResult;
+  // The backend answers 409 { retryable: true } while its RPC node hasn't seen
+  // the freshly-placed Bet PDA yet (it already polls server-side; this covers
+  // longer propagation gaps). Retry a few times before surfacing an error.
+  const MAX_ATTEMPTS = 4;
+  for (let attempt = 1; ; attempt++) {
+    const r = await fetch(`${BACKEND_URL}/api/bets/settle`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ player, nonce }),
+    });
+    const data = await r.json();
+    if (r.ok) return data as SettleResult;
+    if (data?.retryable && attempt < MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      continue;
+    }
+    throw new Error(data.error || "settlement failed");
+  }
 }
 
 export interface VerifyResult {
