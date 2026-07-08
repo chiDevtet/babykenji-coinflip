@@ -51,6 +51,12 @@ export const config = {
   tokenDevFeeAccount: new PublicKey(required("TOKEN_DEV_FEE_ACCOUNT")),
   tokenHolderRewardsAccount: new PublicKey(required("TOKEN_HOLDER_REWARDS_ACCOUNT")),
   holderRewardsMode: process.env.HOLDER_REWARDS_MODE || "accumulate_only",
+  // Super admin (root of trust) for the dashboard. Optional: when unset, every
+  // /api/admin route answers 403 and the dashboard is effectively disabled.
+  adminSuperWallet:
+    process.env.ADMIN_SUPER_WALLET && !process.env.ADMIN_SUPER_WALLET.startsWith("REPLACE_WITH")
+      ? new PublicKey(process.env.ADMIN_SUPER_WALLET)
+      : null,
   settleAuthority,
   totalFeeBps,
   solPlayerWinPayoutBps,

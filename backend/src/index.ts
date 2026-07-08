@@ -6,6 +6,7 @@ import { connectDb } from "./db";
 import { ensureActiveSeed } from "./seedManager";
 import { fairnessRouter } from "./routes/fairness";
 import { betsRouter } from "./routes/bets";
+import { adminRouter } from "./routes/admin";
 
 async function main() {
   await connectDb();
@@ -36,6 +37,16 @@ async function main() {
     rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false })
   );
 
+  // Admin surface: tight limit on login attempts, moderate on the rest.
+  app.use(
+    "/api/admin/auth",
+    rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false })
+  );
+  app.use(
+    "/api/admin",
+    rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false })
+  );
+
   app.get("/health", (_req, res) =>
     res.json({
       ok: true,
@@ -47,6 +58,7 @@ async function main() {
 
   app.use("/api/fairness", fairnessRouter);
   app.use("/api/bets", betsRouter);
+  app.use("/api/admin", adminRouter);
 
   app.listen(config.port, () => {
     console.log(`[server] listening on :${config.port}`);

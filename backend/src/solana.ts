@@ -123,7 +123,9 @@ export function decodeBet(data: Buffer): DecodedBet {
 
 export interface DecodedConfig {
   admin: PublicKey;
+  pendingAdmin: PublicKey;
   settleAuthority: PublicKey;
+  randomnessAuthority: PublicKey;
   tokenMint: PublicKey;
   treasuryVault: PublicKey;
   solTeamWallet: PublicKey;
@@ -135,35 +137,74 @@ export interface DecodedConfig {
   currentSeedHashHex: string;
   seedEpoch: bigint;
   feeBps: number;
-  paused: boolean;
+  solPlayerWinPayoutBps: number;
+  tokenPlayerWinPayoutBps: number;
+  minBet: bigint;
+  maxBet: bigint;
+  maxPayoutBpsOfTreasury: number;
   outstandingLiability: bigint;
+  paused: boolean;
+  totalBets: bigint;
+  totalWagered: bigint;
+  totalPaidOut: bigint;
   solVault: PublicKey;
   solMinBet: bigint;
   solMaxBet: bigint;
   outstandingLiabilitySol: bigint;
 }
 
+// Sequential cursor over the exact Rust GameConfig field order (see the struct
+// in program/programs/forge-coinflip/src/lib.rs). An earlier version of this
+// decoder used magic offsets that predated the split into separate SOL/token
+// payout-bps fields, so outstanding/paused/sol_vault were read 4 bytes off;
+// walking the declaration order keeps the offsets self-consistent.
 export function decodeConfig(data: Buffer): DecodedConfig {
+  let off = 8; // skip anchor account discriminator
+  const pk = () => new PublicKey(data.subarray(off, (off += 32)));
+  const u16 = () => { const v = data.readUInt16LE(off); off += 2; return v; };
+  const u64 = () => { const v = data.readBigUInt64LE(off); off += 8; return v; };
+  const u128 = () => { const v = readU128LE(data, off); off += 16; return v; };
+  const u8 = () => data.readUInt8(off++);
+  const bytes = (n: number) => data.subarray(off, (off += n));
+
+  const admin = pk();
+  const pendingAdmin = pk();
+  const settleAuthority = pk();
+  const randomnessAuthority = pk();
+  const tokenMint = pk();
+  const treasuryVault = pk();
+  const solTeamWallet = pk();
+  const solDevBuybackWallet = pk();
+  const solHolderRewardsWallet = pk();
+  const tokenTeamFeeAccount = pk();
+  const tokenDevFeeAccount = pk();
+  const tokenHolderRewardsAccount = pk();
+  const currentSeedHashHex = bytes(32).toString("hex");
+  const seedEpoch = u64();
+  const feeBps = u16();
+  const solPlayerWinPayoutBps = u16();
+  const tokenPlayerWinPayoutBps = u16();
+  const minBet = u64();
+  const maxBet = u64();
+  const maxPayoutBpsOfTreasury = u16();
+  const outstandingLiability = u128();
+  const paused = u8() === 1;
+  const totalBets = u64();
+  const totalWagered = u128();
+  const totalPaidOut = u128();
+  const solVault = pk();
+  const solMinBet = u64();
+  const solMaxBet = u64();
+  const outstandingLiabilitySol = u128();
+
   return {
-    admin: new PublicKey(data.subarray(8, 40)),
-    settleAuthority: new PublicKey(data.subarray(72, 104)),
-    tokenMint: new PublicKey(data.subarray(136, 168)),
-    treasuryVault: new PublicKey(data.subarray(168, 200)),
-    solTeamWallet: new PublicKey(data.subarray(200, 232)),
-    solDevBuybackWallet: new PublicKey(data.subarray(232, 264)),
-    solHolderRewardsWallet: new PublicKey(data.subarray(264, 296)),
-    tokenTeamFeeAccount: new PublicKey(data.subarray(296, 328)),
-    tokenDevFeeAccount: new PublicKey(data.subarray(328, 360)),
-    tokenHolderRewardsAccount: new PublicKey(data.subarray(360, 392)),
-    currentSeedHashHex: data.subarray(392, 424).toString("hex"),
-    seedEpoch: data.readBigUInt64LE(424),
-    feeBps: data.readUInt16LE(432),
-    outstandingLiability: readU128LE(data, 452),
-    paused: data.readUInt8(468) === 1,
-    solVault: new PublicKey(data.subarray(509, 541)),
-    solMinBet: data.readBigUInt64LE(541),
-    solMaxBet: data.readBigUInt64LE(549),
-    outstandingLiabilitySol: readU128LE(data, 557),
+    admin, pendingAdmin, settleAuthority, randomnessAuthority, tokenMint,
+    treasuryVault, solTeamWallet, solDevBuybackWallet, solHolderRewardsWallet,
+    tokenTeamFeeAccount, tokenDevFeeAccount, tokenHolderRewardsAccount,
+    currentSeedHashHex, seedEpoch, feeBps, solPlayerWinPayoutBps,
+    tokenPlayerWinPayoutBps, minBet, maxBet, maxPayoutBpsOfTreasury,
+    outstandingLiability, paused, totalBets, totalWagered, totalPaidOut,
+    solVault, solMinBet, solMaxBet, outstandingLiabilitySol,
   };
 }
 
@@ -316,6 +357,63 @@ export function buildRefundSolIx(player: PublicKey, nonce: number | bigint, rand
     { pubkey: randomnessAccount, isSigner: false, isWritable: false },
   ];
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data: ixDisc("refund_expired_bet_sol") });
+}
+
+/** Fields an admin may change via update_config. Omitted fields stay unchanged
+ *  (encoded as borsh None), so a partial update can never clobber the rest. */
+export interface UpdateConfigParams {
+  settleAuthority?: PublicKey;
+  feeBps?: number;
+  solPlayerWinPayoutBps?: number;
+  tokenPlayerWinPayoutBps?: number;
+  minBet?: bigint;
+  maxBet?: bigint;
+  maxPayoutBpsOfTreasury?: number;
+  paused?: boolean;
+  solMinBet?: bigint;
+  solMaxBet?: bigint;
+}
+
+// Borsh-encodes UpdateParams in the exact Rust field order (lib.rs UpdateParams):
+// settle_authority, fee_bps, sol_player_win_payout_bps, token_player_win_payout_bps,
+// min_bet, max_bet, max_payout_bps_of_treasury, paused, sol_min_bet, sol_max_bet.
+// The instruction must be SIGNED BY GameConfig.admin — the backend only builds
+// and simulates it; the admin wallet signs in the dashboard.
+export function buildUpdateConfigIx(admin: PublicKey, params: UpdateConfigParams): TransactionInstruction {
+  const none = Buffer.from([0]);
+  const someU16 = (v: number) => {
+    const b = Buffer.alloc(3);
+    b.writeUInt8(1, 0);
+    b.writeUInt16LE(v, 1);
+    return b;
+  };
+  const someU64 = (v: bigint) => {
+    const b = Buffer.alloc(9);
+    b.writeUInt8(1, 0);
+    b.writeBigUInt64LE(v, 1);
+    return b;
+  };
+  const someBool = (v: boolean) => Buffer.from([1, v ? 1 : 0]);
+  const somePubkey = (v: PublicKey) => Buffer.concat([Buffer.from([1]), v.toBuffer()]);
+
+  const data = Buffer.concat([
+    ixDisc("update_config"),
+    params.settleAuthority !== undefined ? somePubkey(params.settleAuthority) : none,
+    params.feeBps !== undefined ? someU16(params.feeBps) : none,
+    params.solPlayerWinPayoutBps !== undefined ? someU16(params.solPlayerWinPayoutBps) : none,
+    params.tokenPlayerWinPayoutBps !== undefined ? someU16(params.tokenPlayerWinPayoutBps) : none,
+    params.minBet !== undefined ? someU64(params.minBet) : none,
+    params.maxBet !== undefined ? someU64(params.maxBet) : none,
+    params.maxPayoutBpsOfTreasury !== undefined ? someU16(params.maxPayoutBpsOfTreasury) : none,
+    params.paused !== undefined ? someBool(params.paused) : none,
+    params.solMinBet !== undefined ? someU64(params.solMinBet) : none,
+    params.solMaxBet !== undefined ? someU64(params.solMaxBet) : none,
+  ]);
+  const keys = [
+    { pubkey: admin, isSigner: true, isWritable: false },
+    { pubkey: configPda(), isSigner: false, isWritable: true },
+  ];
+  return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
 }
 
 export function buildRotateSeedIx(newSeedHash: Buffer): TransactionInstruction {

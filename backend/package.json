@@ -27,13 +27,14 @@
   "dependencies": {
     "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.4",
+    "@switchboard-xyz/common": "^5.8.2",
+    "@switchboard-xyz/on-demand": "^3.10.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "mongoose": "^8.6.0",
-    "@switchboard-xyz/on-demand": "^3.10.3",
-    "@switchboard-xyz/common": "^5.8.2"
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
