@@ -1,6 +1,7 @@
 import {
   Connection,
   PublicKey,
+  SystemProgram,
   Transaction,
   TransactionInstruction,
   sendAndConfirmTransaction,
@@ -170,6 +171,73 @@ export async function fetchBet(player: PublicKey, nonce: number | bigint): Promi
   const info = await connection.getAccountInfo(betPda(player, nonce));
   if (!info) return null;
   return decodeBet(info.data);
+}
+
+// PlayerState layout: disc(8) player(32) config(32) nonce(u64 @72) bump(@80). The
+// next bet uses the current nonce; a missing account means the player's first bet
+// (nonce 0). Mirrors the frontend's fetchPlayerNonce so PDAs line up.
+export async function fetchPlayerNonce(player: PublicKey): Promise<bigint> {
+  const info = await connection.getAccountInfo(playerStatePda(configPda(), player));
+  if (!info) return 0n;
+  return info.data.readBigUInt64LE(72);
+}
+
+function encodePlaceBetData(ix: "place_bet" | "place_bet_sol", amount: bigint, choice: number, clientSeed: Buffer): Buffer {
+  if (clientSeed.length !== 32) throw new Error("clientSeed must be 32 bytes");
+  const data = Buffer.alloc(8 + 8 + 1 + 32);
+  ixDisc(ix).copy(data, 0);
+  data.writeBigUInt64LE(amount, 8);
+  data.writeUInt8(choice, 16);
+  clientSeed.copy(data, 17);
+  return data;
+}
+
+// place_bet_sol — account order MUST match the Rust PlaceBetSol context (same as
+// the frontend builder). Built server-side so the settle authority can be the
+// randomness authority; the player signs as fee payer + wager source.
+export function buildPlaceBetSolIx(
+  player: PublicKey,
+  amount: bigint,
+  choice: number,
+  clientSeed: Buffer,
+  nonce: number | bigint,
+  randomnessAccount: PublicKey
+): TransactionInstruction {
+  const cfg = configPda();
+  const keys = [
+    { pubkey: player, isSigner: true, isWritable: true },
+    { pubkey: cfg, isSigner: false, isWritable: true },
+    { pubkey: playerStatePda(cfg, player), isSigner: false, isWritable: true },
+    { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
+    { pubkey: solVaultPda(cfg), isSigner: false, isWritable: true },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+  return new TransactionInstruction({ programId: PROGRAM_ID, keys, data: encodePlaceBetData("place_bet_sol", amount, choice, clientSeed) });
+}
+
+// place_bet (SPL token) — account order MUST match the Rust PlaceBet context.
+export function buildPlaceBetIx(
+  player: PublicKey,
+  amount: bigint,
+  choice: number,
+  clientSeed: Buffer,
+  nonce: number | bigint,
+  randomnessAccount: PublicKey
+): TransactionInstruction {
+  const cfg = configPda();
+  const keys = [
+    { pubkey: player, isSigner: true, isWritable: true },
+    { pubkey: cfg, isSigner: false, isWritable: true },
+    { pubkey: playerStatePda(cfg, player), isSigner: false, isWritable: true },
+    { pubkey: betPda(player, nonce), isSigner: false, isWritable: true },
+    { pubkey: vaultPda(cfg), isSigner: false, isWritable: true },
+    { pubkey: getAssociatedTokenAddressSync(TOKEN_MINT, player), isSigner: false, isWritable: true },
+    { pubkey: randomnessAccount, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+  ];
+  return new TransactionInstruction({ programId: PROGRAM_ID, keys, data: encodePlaceBetData("place_bet", amount, choice, clientSeed) });
 }
 
 export async function fetchConfig(): Promise<DecodedConfig | null> {

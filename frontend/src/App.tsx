@@ -2,12 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
 import type { Connection, TransactionInstruction } from "@solana/web3.js";
-import { createCommittedRandomness } from "./lib/switchboard";
 import { getMint, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { TOKEN_MINT, CONFIGURED, type Asset } from "./lib/constants";
-import { buildPlaceBetIx, buildPlaceBetSolIx, fetchConfigView, fetchPlayerNonce, fetchVaultBalances, type ConfigView } from "./lib/anchorIx";
+import { fetchConfigView, fetchPlayerNonce, fetchVaultBalances, type ConfigView } from "./lib/anchorIx";
 import { computeMaxWager, isHouseFunded } from "./lib/wager";
-import { getCommitment, settleBet, type Commitment } from "./lib/api";
+import { getCommitment, preparePlaceBet, settleBet, type Commitment } from "./lib/api";
 import WalletBar from "./components/WalletBar";
 import CoinFlip from "./components/CoinFlip";
 import BetPanel from "./components/BetPanel";
@@ -26,6 +25,13 @@ function randomSeed(): Uint8Array {
   const b = new Uint8Array(32);
   crypto.getRandomValues(b);
   return b;
+}
+// Decode a base64 string to bytes without relying on Node's Buffer in the browser.
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 function fmtBase(base: bigint, decimals: number): string {
   const d = 10n ** BigInt(decimals);
@@ -330,49 +336,48 @@ export default function App() {
       setCoinResult(null);
       setSpinning(true);
       try {
-        const currentNonce = await fetchPlayerNonce(connection, publicKey);
-        const sbRandomness = await createCommittedRandomness(connection, publicKey);
-        const placeIx =
-          asset === "sol"
-            ? buildPlaceBetSolIx(publicKey, amountBase, choice, clientSeed, currentNonce, sbRandomness.keypair.publicKey)
-            : buildPlaceBetIx(publicKey, amountBase, choice, clientSeed, currentNonce, sbRandomness.keypair.publicKey);
-
-        // Switchboard randomness create + commit + place_bet ride in ONE signed
-        // transaction, so the commit and place_bet execute in the same slot. That
-        // keeps them inside the program's MAX_RANDOMNESS_COMMIT_AGE_SLOTS window
-        // (seed_slot == current_slot-1, so current_slot - seed_slot == 1 <= 2) with
-        // the value still unrevealed — exactly what validate_randomness_commit wants.
-        const ixs = [sbRandomness.createIx, sbRandomness.commitIx, placeIx];
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+        // The backend creates + commits the Switchboard randomness (authority = the
+        // settle authority, so the crank can reveal it later) and returns a
+        // create+commit+place_bet transaction it has already partially signed. The
+        // player just adds their signature and submits — commit and place_bet stay
+        // atomic in one slot, inside the program's randomness-age window, while the
+        // randomness authority stays with the backend for the reveal at settle time.
+        const prepared = await preparePlaceBet({
+          player: publicKey.toBase58(),
+          amount: amountBase.toString(),
+          choice,
+          clientSeedHex: toHex(clientSeed),
+          asset,
+        });
+        const tx = Transaction.from(b64ToBytes(prepared.transaction));
 
         // Surface the real on-chain error before the wallet masks it as "Internal
-        // error". If the tx reverts in simulation, abort with the decoded AnchorError
+        // error". If it reverts in simulation, abort with the decoded AnchorError
         // instead of prompting for a signature on a doomed transaction.
-        const simError = await simulateFlip(connection, publicKey, ixs, blockhash);
+        const simError = await simulateFlip(connection, publicKey, tx.instructions, tx.recentBlockhash!);
         if (simError) throw new Error(simError);
-
-        const tx = new Transaction().add(...ixs);
-        tx.recentBlockhash = blockhash;
-        tx.feePayer = publicKey;
 
         let sig: string;
         try {
-          sig = await sendTransaction(tx, connection, { signers: [sbRandomness.keypair] });
+          // Wallet adds the player's signature, preserving the backend's partial sigs.
+          sig = await sendTransaction(tx, connection);
         } catch (sendErr) {
           throw new Error(describeSendError(sendErr));
         }
-        await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+        await connection.confirmTransaction(
+          { signature: sig, blockhash: prepared.blockhash, lastValidBlockHeight: prepared.lastValidBlockHeight },
+          "confirmed"
+        );
 
-        // Backend reads the asset off-chain from the Bet PDA and settles with the
-        // matching instruction, so the client just asks it to settle this nonce.
-        const result = await settleBet(publicKey.toBase58(), Number(currentNonce));
+        // Backend holds the randomness authority, so it reveals + settles this nonce.
+        const result = await settleBet(publicKey.toBase58(), prepared.nonce);
 
         const payoutDecimals = asset === "sol" ? 9 : decimals;
         setCoinResult(result.resultLabel);
         setSpinning(false);
         setLastResult({
           won: result.won,
-          label: result.resultLabel,
+          label: result.resultLabel ?? "",
           payout: fmtBase(BigInt(result.payout), payoutDecimals),
         });
 
