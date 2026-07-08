@@ -426,12 +426,19 @@ export function buildRotateSeedIx(newSeedHash: Buffer): TransactionInstruction {
   return new TransactionInstruction({ programId: PROGRAM_ID, keys, data });
 }
 
-/** Sign with the settle authority (fee payer) and confirm. */
+/** Sign with the settle authority (fee payer) and confirm.
+ *
+ * "confirmed" (optimistic confirmation — a supermajority of stake voted on the
+ * block) rather than "finalized": finalization takes ~32 slots (~15-20s) and
+ * was the bulk of the ~30s flip-to-result latency, while a confirmed
+ * settlement is already safe to report — if the near-impossible rollback ever
+ * happened the Bet PDA would still be open and /settle is idempotent, so a
+ * retry (or the refund path) covers it. */
 export async function sendIxs(ixs: TransactionInstruction[]): Promise<string> {
   const tx = new Transaction().add(...ixs);
   tx.feePayer = config.settleAuthority.publicKey;
   return sendAndConfirmTransaction(connection, tx, [config.settleAuthority], {
-    commitment: "finalized",
+    commitment: "confirmed",
     skipPreflight: false,
   });
 }
