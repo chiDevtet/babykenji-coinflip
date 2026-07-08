@@ -102,6 +102,8 @@ export interface RecentBet {
   asset: "token" | "sol";
   amount: string; // base units
   payout: string; // base units
+  /** Tokens auto-burned on this flip (base units); "0"/absent for SOL flips. */
+  burnFeeAmount?: string | null;
   won: boolean;
   settleTx: string | null;
   createdAt: string; // ISO timestamp

@@ -305,6 +305,8 @@ export default function App() {
       setLastResult({ won, label: bit === 0 ? "heads" : "tails", payout: fmtBase(payout, effectiveDecimals) });
 
       // Surface the player's own simulated flip at the top of the Live Flips feed.
+      // Token flips mirror the on-chain 1.67% auto-burn so the feed's flame badge
+      // shows in demo mode too.
       setOwnFlips((prev) => [
         ...prev,
         {
@@ -314,6 +316,7 @@ export default function App() {
           asset,
           amount: amountBase.toString(),
           payout: payout.toString(),
+          burnFeeAmount: asset === "sol" ? "0" : ((amountBase * 167n) / 10_000n).toString(),
           won,
           settleTx: null,
           createdAt: new Date().toISOString(),
