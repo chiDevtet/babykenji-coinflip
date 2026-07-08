@@ -33,4 +33,4 @@ Checklist:
 - [ ] Verify recent bets endpoint and frontend feed.
 - [ ] Verify logs contain no private keys, seeds, Mongo passwords, or admin tokens.
 - [ ] Verify admin withdrawable balance respects outstanding liabilities.
-- [ ] Verify fee amounts emitted/mirrored. Current code does not externally transfer fee splits or burn tokens; production must account for this blocker.
+- [ ] Verify fee amounts emitted/mirrored, and that settlement transferred the team/dev/holder fee splits to their accounts and burned the token burn share (both happen on-chain in `settle_bet` / `settle_bet_sol`).

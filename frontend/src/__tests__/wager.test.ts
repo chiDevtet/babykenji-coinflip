@@ -6,9 +6,13 @@ const FEE_BPS = 1000;
 const PAYOUT_BPS = 17800;
 const MAX_PAYOUT_BPS = 800;
 const TOKEN_MIN = 1_000_000n; // 0.001 $BABYK
-const TOKEN_MAX = 1_000_000_000n; // 1.0 $BABYK
+const TOKEN_MAX = 1_000_000_000n; // 1.0 $BABYK (the misconfigured launch value)
 const SOL_MIN = 1_000_000n; // 0.001 SOL
 const SOL_MAX = 100_000_000n; // 0.1 SOL
+
+// Corrected token max_bet applied via update_config (scripts/update-wager-limits.ts):
+// a 10,000,000 $BABYK backstop that leaves the 8% treasury cap as the governing limit.
+const TOKEN_MAX_FIXED = 10_000_000_000_000_000n;
 
 const base = {
   outstandingLiability: 0n,
@@ -29,6 +33,26 @@ describe("computeMaxWager", () => {
     const max = computeMaxWager({ ...base, configMaxBet: TOKEN_MAX, vaultBalance: 10_000_000_000_000n });
     expect(max).toBe(TOKEN_MAX);
     expect(isHouseFunded(max, TOKEN_MIN)).toBe(true);
+  });
+
+  it("token: the 1.0 $BABYK launch max_bet pins MAX at 1 regardless of vault size (the live bug)", () => {
+    // Live mainnet vault at the time of the fix: 3,386,226.83 $BABYK. The 8%
+    // treasury cap allows ~159k, but max_bet = 1e9 (1.0 token) always wins.
+    const liveVault = 3_386_226_831_782_106n;
+    const max = computeMaxWager({ ...base, configMaxBet: TOKEN_MAX, vaultBalance: liveVault });
+    expect(max).toBe(TOKEN_MAX); // exactly 1.0 $BABYK
+  });
+
+  it("token: after raising max_bet, the 8% treasury cap governs and scales with the vault", () => {
+    // Same live vault, corrected backstop → cap = vault * 800 / (17800 - 800).
+    const liveVault = 3_386_226_831_782_106n;
+    const max = computeMaxWager({ ...base, configMaxBet: TOKEN_MAX_FIXED, vaultBalance: liveVault });
+    expect(max).toBe((liveVault * 800n) / 17_000n); // ≈159,351 $BABYK
+    expect(max).toBeLessThan(TOKEN_MAX_FIXED);
+
+    // Scaling: double the vault → double the MAX (treasury cap, not the backstop).
+    const max2 = computeMaxWager({ ...base, configMaxBet: TOKEN_MAX_FIXED, vaultBalance: liveVault * 2n });
+    expect(max2).toBe((liveVault * 2n * 800n) / 17_000n);
   });
 
   it("sol: treasury per-bet cap binds below config max when the vault is thin", () => {

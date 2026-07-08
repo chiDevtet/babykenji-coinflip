@@ -97,9 +97,17 @@ npm run monte-carlo:stress
 
 The settlement surface is `POST /api/bets/settle` with `{ "player": "<PLAYER>", "nonce": 0 }`. The backend fetches the Bet PDA, reads the committed randomness account, builds a Switchboard reveal ix, then settles through `settle_bet` or `settle_bet_sol`. The client does not provide `won`, payout, fee recipients, or result bit.
 
-## Holder rewards worker status
+## Holder rewards distributor
 
-`backend/src/rewards/worker.ts` implements deterministic holder aggregation, pro-rata allocation, Mongo `RewardCycle` creation, Mongo `RewardPayout` creation, sent marking, and failed-payout retry state. It is not enabled for production by default. Set `HOLDER_REWARDS_MODE=accumulate_only` for MVP; do not advertise automatic distributions until scanner/sender/idempotent execution passes end-to-end tests.
+`backend/src/rewards/distributorMain.ts` is a standalone pm2-able worker that
+scans holders, applies the configured eligibility floor and exclusions, and
+pays the accumulated holder-rewards pots out pro-rata once they cross their
+MongoDB-configured thresholds. It is DRY-RUN by default (`--execute` to send,
+`--daemon` to loop) and resumes idempotent cycles after a crash. Thresholds,
+splits, the eligibility floor, and exclusions are edited from the admin
+dashboard (`#/admin`). See `docs/ROLLOUT_RUNBOOK.md` for rollout steps and the
+manual test checklist. The pure primitives live in
+`backend/src/rewards/worker.ts`.
 
 ## Security operations
 

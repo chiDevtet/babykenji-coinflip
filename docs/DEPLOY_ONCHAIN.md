@@ -212,7 +212,7 @@ Do not proceed unless every hard gate in [`MAINNET_RELEASE_CHECKLIST.md`](MAINNE
 
 The old program id `DmHi2MW2ibqqGMAgg3EtumHTaguKbydSnszAHiGUf3WA` is treated as closed/unusable because deploy failed with a missing ProgramData account. Do **not** reuse it for launch.
 
-Fresh launch program id: `9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH`.
+Live mainnet program id: `DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj`. (An interim recovery id `9pJDqDv13FwjWHWJDMB947nV2dH2JbYtdqWBN7kgvzEH` appeared in older revisions of this repo but was never deployed to any cluster.)
 
 Recovery/deploy steps:
 

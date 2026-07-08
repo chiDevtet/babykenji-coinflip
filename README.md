@@ -22,6 +22,7 @@ Read these in order for a new deployment:
 8. [`docs/OPERATOR_RUNBOOK.md`](docs/OPERATOR_RUNBOOK.md) — ongoing operations, pause/unpause, retries, incidents, key rotation.
 9. [`docs/MIGRATION_NOTES.md`](docs/MIGRATION_NOTES.md) — breaking account layout changes and migration constraints.
 10. [`docs/MAINNET_RELEASE_CHECKLIST.md`](docs/MAINNET_RELEASE_CHECKLIST.md) — hard mainnet gates.
+11. [`docs/ROLLOUT_RUNBOOK.md`](docs/ROLLOUT_RUNBOOK.md) — wager-limit fix, holder-rewards distributor, and admin dashboard rollout + manual test checklist.
 
 Related existing references:
 

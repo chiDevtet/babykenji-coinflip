@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test -r ts-node/register tests/rewards.test.ts",
+    "test": "node --test -r ts-node/register tests/rewards.test.ts tests/distributor.test.ts",
     "monte-carlo": "node -r ts-node/register src/sim/monteCarlo.ts",
     "monte-carlo:sol": "npm run monte-carlo -- --asset sol",
     "monte-carlo:token": "npm run monte-carlo -- --asset token",
@@ -17,19 +17,24 @@
     "monte-carlo:stress": "npm run monte-carlo -- --scenario mixed-asset-chaos --iterations 100000",
     "test:monte-carlo": "node --test -r ts-node/register src/sim/monteCarlo.test.ts",
     "verify:env": "ts-node ../scripts/verify-env.ts",
+    "wager:limits": "ts-node scripts/update-wager-limits.ts",
+    "wager:limits:execute": "ts-node scripts/update-wager-limits.ts --execute",
+    "distributor": "ts-node src/rewards/distributorMain.ts",
+    "distributor:execute": "ts-node src/rewards/distributorMain.ts --execute",
     "verify:config": "ts-node ../scripts/verify-config.ts",
     "print:wallet-matrix": "ts-node ../scripts/print-wallet-matrix.ts"
   },
   "dependencies": {
     "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.95.4",
+    "@switchboard-xyz/common": "^5.8.2",
+    "@switchboard-xyz/on-demand": "^3.10.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "mongoose": "^8.6.0",
-    "@switchboard-xyz/on-demand": "^3.10.3",
-    "@switchboard-xyz/common": "^5.8.2"
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
