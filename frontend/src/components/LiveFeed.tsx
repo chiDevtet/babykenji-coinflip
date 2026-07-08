@@ -21,6 +21,8 @@ export interface FeedFlip {
   asset: Asset; // "token" | "sol"
   amount: string; // base units
   payout: string; // base units
+  /** Tokens auto-burned on this flip (base units); "0"/absent for SOL flips. */
+  burnFeeAmount?: string | null;
   won: boolean;
   settleTx: string | null;
   createdAt: string; // ISO timestamp
@@ -103,6 +105,7 @@ function synthRow(tokenDecimals: number, id: number, agoSec: number): FeedFlip {
   const amount = isSol ? toBase(pick(SOL_UI), 9) : toBase(pick(TOKEN_UI), tokenDecimals);
   const won = Math.random() < 0.5;
   const payout = won ? (amount * 178n) / 100n : 0n; // 1.78x default payout with a 1% vault reserve edge
+  const burn = isSol ? 0n : (amount * 167n) / 10_000n; // token path auto-burns 1.67% of the wager
   return {
     player: randB58(44),
     nonce: id,
@@ -110,6 +113,7 @@ function synthRow(tokenDecimals: number, id: number, agoSec: number): FeedFlip {
     asset,
     amount: amount.toString(),
     payout: payout.toString(),
+    burnFeeAmount: burn.toString(),
     won,
     settleTx: randB58(88),
     createdAt: new Date(Date.now() - agoSec * 1000).toISOString(),
@@ -267,6 +271,17 @@ function FlipRow({
   const payout = fmtAmount(flip.payout, decimals);
   const href = flip.settleTx ? `https://solscan.io/tx/${flip.settleTx}` : undefined;
 
+  // Tokens auto-burned by this flip's on-chain settlement (token path only —
+  // SOL can't burn). Win or lose, the program burns this from the wager.
+  let burn = 0n;
+  if (!isSol && flip.burnFeeAmount) {
+    try {
+      burn = BigInt(flip.burnFeeAmount);
+    } catch {
+      burn = 0n;
+    }
+  }
+
   const inner = (
     <>
       <img
@@ -295,6 +310,17 @@ function FlipRow({
               {wager} {symbol}
             </span>
           </span>
+          {burn > 0n && (
+            <>
+              <span className="flip-sep">·</span>
+              <span
+                className="flip-burn mono"
+                title={`${fmtBase(burn, decimals)} ${symbol} auto-burned on this flip`}
+              >
+                <span aria-hidden="true">🔥</span> {fmtBase(burn, decimals)}
+              </span>
+            </>
+          )}
           <span className="flip-sep">·</span>
           <span className="flip-time">{relTime(flip.createdAt, now)}</span>
         </div>
