@@ -9,6 +9,7 @@ interface Props {
   decimals: number;
   minBet: bigint;
   maxBet: bigint;
+  houseFunded: boolean;
   balance: bigint;
   connected: boolean;
   paused: boolean;
@@ -44,6 +45,7 @@ export default function BetPanel({
   decimals,
   minBet,
   maxBet,
+  houseFunded,
   balance,
   connected,
   paused,
@@ -61,7 +63,7 @@ export default function BetPanel({
   const tooBig = base !== null && base > maxBet;
   const insufficient = base !== null && base > balance;
   const validAmount = base !== null && base > 0n && !tooSmall && !tooBig && !insufficient;
-  const canFlip = connected && !paused && !busy && validAmount;
+  const canFlip = connected && !paused && houseFunded && !busy && validAmount;
 
   return (
     <div className="panel bet-panel">
@@ -121,7 +123,11 @@ export default function BetPanel({
           </button>
         </div>
         <div className="limits">
-          min {fmt(minBet, decimals)} · max {fmt(maxBet, decimals)} · balance {fmt(balance, decimals)} {symbol}
+          {houseFunded ? (
+            <>min {fmt(minBet, decimals)} · max {fmt(maxBet, decimals)} · balance {fmt(balance, decimals)} {symbol}</>
+          ) : (
+            <>house not funded yet · balance {fmt(balance, decimals)} {symbol}</>
+          )}
         </div>
       </label>
 
@@ -131,6 +137,9 @@ export default function BetPanel({
 
       <div className="status">
         {!connected && <span className="muted">Connect a wallet to play.</span>}
+        {connected && !paused && !houseFunded && (
+          <span className="warn">House treasury isn’t funded yet — flips are disabled until the vault is topped up.</span>
+        )}
         {paused && <span className="warn">Game is paused.</span>}
         {tooSmall && <span className="warn">Below minimum bet.</span>}
         {tooBig && <span className="warn">Above maximum bet.</span>}

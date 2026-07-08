@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { Transaction } from "@solana/web3.js";
+import { PublicKey, Transaction } from "@solana/web3.js";
 import { createCommittedRandomness } from "./lib/switchboard";
 import { getMint, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { TOKEN_MINT, CONFIGURED, type Asset } from "./lib/constants";
-import { buildPlaceBetIx, buildPlaceBetSolIx, fetchConfigView, fetchPlayerNonce, type ConfigView } from "./lib/anchorIx";
+import { buildPlaceBetIx, buildPlaceBetSolIx, fetchConfigView, fetchPlayerNonce, fetchVaultBalances, type ConfigView } from "./lib/anchorIx";
+import { computeMaxWager, isHouseFunded } from "./lib/wager";
 import { getCommitment, settleBet, type Commitment } from "./lib/api";
 import WalletBar from "./components/WalletBar";
 import CoinFlip from "./components/CoinFlip";
@@ -34,22 +35,40 @@ function fmtBase(base: bigint, decimals: number): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Per-asset stand-ins used in preview/demo so the UI is fully interactive without
-// a deployed program. Token amounts assume 6 decimals; SOL uses 9.
+// a deployed program. Both $BABYK and SOL use 9 decimals (matching the real mint).
 type AssetParams = { symbol: string; decimals: number; balance: bigint; cfg: ConfigView };
+// Demo house vault is treated as well-funded so the treasury-based MAX doesn't bind
+// in preview; live mode reads the real vault balances instead.
+const DEMO_CFG_BASE = {
+  feeBps: 1000,
+  solPlayerWinPayoutBps: 17800,
+  tokenPlayerWinPayoutBps: 17800,
+  maxPayoutBpsOfTreasury: 800,
+  paused: false,
+  seedEpoch: 0n,
+  currentSeedHashHex: "preview",
+  outstandingLiability: 0n,
+  outstandingLiabilitySol: 0n,
+  treasuryVault: PublicKey.default,
+  solVault: PublicKey.default,
+};
 const DEMO_ASSETS: Record<Asset, AssetParams> = {
   token: {
     symbol: TOKEN_SYMBOL,
-    decimals: 6,
-    balance: 1_000_000_000n, // 1,000 tokens
-    cfg: { feeBps: 1000, solPlayerWinPayoutBps: 17800, tokenPlayerWinPayoutBps: 17800, minBet: 10_000n, maxBet: 100_000_000n, paused: false, seedEpoch: 0n, currentSeedHashHex: "preview", solMinBet: 50_000_000n, solMaxBet: 5_000_000_000n },
+    decimals: 9,
+    balance: 1_000_000_000_000n, // 1,000 $BABYK
+    cfg: { ...DEMO_CFG_BASE, minBet: 1_000_000n, maxBet: 1_000_000_000n, solMinBet: 1_000_000n, solMaxBet: 100_000_000n }, // 0.001–1.0 $BABYK
   },
   sol: {
     symbol: "SOL",
     decimals: 9,
     balance: 10_000_000_000n, // 10 SOL
-    cfg: { feeBps: 1000, solPlayerWinPayoutBps: 17800, tokenPlayerWinPayoutBps: 17800, minBet: 50_000_000n, maxBet: 5_000_000_000n, paused: false, seedEpoch: 0n, currentSeedHashHex: "preview", solMinBet: 50_000_000n, solMaxBet: 5_000_000_000n }, // 0.05–5 SOL
+    cfg: { ...DEMO_CFG_BASE, minBet: 1_000_000n, maxBet: 100_000_000n, solMinBet: 1_000_000n, solMaxBet: 100_000_000n }, // 0.001–0.1 SOL
   },
 };
+// House vault balances (base units) large enough that the treasury cap never
+// binds in demo — preview should always be flippable.
+const DEMO_VAULT_BALANCE = 1_000_000_000_000_000n;
 const DEMO_COMMITMENT: Commitment = {
   epoch: 0,
   commitHashHex: "demo".repeat(16).slice(0, 64),
@@ -64,7 +83,7 @@ export default function App() {
   const [demo, setDemo] = useState<boolean>(!CONFIGURED);
   const [asset, setAsset] = useState<Asset>("token");
 
-  const [decimals, setDecimals] = useState(6);
+  const [decimals, setDecimals] = useState(9);
   const [cfg, setCfg] = useState<ConfigView | null>(null);
   const [commitment, setCommitment] = useState<Commitment | null>(null);
 
@@ -72,6 +91,11 @@ export default function App() {
   const [solLamports, setSolLamports] = useState<bigint>(0n);
   const [tokenBase, setTokenBase] = useState<bigint>(0n);
   const [nonce, setNonce] = useState<bigint>(0n);
+
+  // Live house-vault balances (base units), used to derive the treasury-based
+  // wager ceiling. Zero until the config loads and the vaults are funded.
+  const [tokenVaultBase, setTokenVaultBase] = useState<bigint>(0n);
+  const [solVaultSpendable, setSolVaultSpendable] = useState<bigint>(0n);
 
   const [clientSeed, setClientSeed] = useState<Uint8Array>(() => randomSeed());
   const [busy, setBusy] = useState(false);
@@ -101,7 +125,13 @@ export default function App() {
         console.warn("could not load mint decimals", e);
       }
       try {
-        setCfg(await fetchConfigView(connection));
+        const view = await fetchConfigView(connection);
+        setCfg(view);
+        if (view) {
+          const vaults = await fetchVaultBalances(connection, view);
+          setTokenVaultBase(vaults.tokenVault);
+          setSolVaultSpendable(vaults.solVaultSpendable);
+        }
       } catch (e) {
         console.warn("could not load config", e);
       }
@@ -157,6 +187,30 @@ export default function App() {
   const effectiveConnected = demo ? true : connected;
   const currentSymbol = asset === "sol" ? "SOL" : TOKEN_SYMBOL;
   const commitmentForPanel = commitment ?? (demo ? DEMO_COMMITMENT : null);
+
+  // The live MAX must reflect BOTH the configured max_bet AND the treasury-based
+  // per-bet cap (payout <= vault_after * max_payout_bps / 10_000) + solvency. With
+  // an unfunded vault this is 0, so FLIP is disabled with a "house not funded" note
+  // instead of showing a bogus number. Demo uses a well-funded stand-in vault.
+  const vaultBalance = demo
+    ? DEMO_VAULT_BALANCE
+    : asset === "sol"
+    ? solVaultSpendable
+    : tokenVaultBase;
+  const maxWager = useMemo(() => {
+    if (!effectiveCfg) return 0n;
+    const payoutBps = asset === "sol" ? effectiveCfg.solPlayerWinPayoutBps : effectiveCfg.tokenPlayerWinPayoutBps;
+    const outstanding = asset === "sol" ? effectiveCfg.outstandingLiabilitySol : effectiveCfg.outstandingLiability;
+    return computeMaxWager({
+      configMaxBet: effectiveCfg.maxBet,
+      vaultBalance,
+      outstandingLiability: outstanding,
+      payoutBps,
+      feeBps: effectiveCfg.feeBps,
+      maxPayoutBpsOfTreasury: effectiveCfg.maxPayoutBpsOfTreasury,
+    });
+  }, [effectiveCfg, vaultBalance, asset]);
+  const houseFunded = effectiveCfg ? isHouseFunded(maxWager, effectiveCfg.minBet) : false;
 
   // Simulated flip: spins, picks a random side, shows win/lose — no wallet/tx.
   const demoFlip = useCallback(
@@ -237,6 +291,13 @@ export default function App() {
 
         setClientSeed(randomSeed());
         await refreshAccount();
+        if (cfg) {
+          try {
+            const vaults = await fetchVaultBalances(connection, cfg);
+            setTokenVaultBase(vaults.tokenVault);
+            setSolVaultSpendable(vaults.solVaultSpendable);
+          } catch {}
+        }
       } catch (e: any) {
         setSpinning(false);
         setCoinResult(null);
@@ -245,7 +306,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [publicKey, connection, sendTransaction, clientSeed, decimals, asset, refreshAccount]
+    [publicKey, connection, sendTransaction, clientSeed, decimals, asset, refreshAccount, cfg]
   );
 
   const onFlip = useCallback(
@@ -279,7 +340,8 @@ export default function App() {
           tokenSymbol={TOKEN_SYMBOL}
           decimals={effectiveDecimals}
           minBet={effectiveCfg?.minBet ?? 0n}
-          maxBet={effectiveCfg?.maxBet ?? 0n}
+          maxBet={maxWager}
+          houseFunded={houseFunded}
           balance={effectiveBalance}
           connected={effectiveConnected}
           paused={effectiveCfg?.paused ?? false}
