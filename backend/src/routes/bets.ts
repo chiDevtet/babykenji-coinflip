@@ -53,7 +53,8 @@ function errLogs(e: any): string[] | undefined {
 }
 
 // Read the result bit after the reveal+settle lands. The reveal writes the value in
-// the same (now-finalized) transaction, so a couple of short retries cover RPC lag.
+// the same (now-confirmed) transaction and we read back at the same "confirmed"
+// commitment, so a couple of short retries cover RPC lag.
 async function resolveResultBit(randomness: PublicKey): Promise<number | null> {
   for (let i = 0; i < 3; i++) {
     const bit = await readResultBit(randomness);
