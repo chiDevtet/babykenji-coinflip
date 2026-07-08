@@ -9,10 +9,37 @@ export interface Commitment {
 
 export interface SettleResult {
   won: boolean;
-  resultBit: number;
-  resultLabel: "heads" | "tails";
+  resultBit: number | null;
+  resultLabel: "heads" | "tails" | null;
   payout: string;
   settleTx: string;
+}
+
+/** A create+commit+place_bet transaction the backend has partially signed (settle
+ *  authority + randomness keypair). The player adds their signature and submits. */
+export interface PreparedFlip {
+  transaction: string; // base64-encoded legacy transaction
+  randomnessAccount: string;
+  nonce: number;
+  blockhash: string;
+  lastValidBlockHeight: number;
+}
+
+export async function preparePlaceBet(params: {
+  player: string;
+  amount: string; // base units
+  choice: number; // 0 heads, 1 tails
+  clientSeedHex: string; // 32 bytes hex
+  asset: "sol" | "token";
+}): Promise<PreparedFlip> {
+  const r = await fetch(`${BACKEND_URL}/api/bets/prepare`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || "failed to prepare flip");
+  return data as PreparedFlip;
 }
 
 export async function getCommitment(): Promise<Commitment> {

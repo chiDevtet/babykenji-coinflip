@@ -1,20 +1,36 @@
 import { Router } from "express";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Transaction } from "@solana/web3.js";
 import {
   fetchBet,
+  fetchPlayerNonce,
+  buildPlaceBetIx,
+  buildPlaceBetSolIx,
   buildSettleIx,
   buildRefundIx,
   buildSettleSolIx,
   buildRefundSolIx,
   sendIxs,
+  connection,
 } from "../solana";
-import { buildRevealIx, readResultBit } from "../switchboard";
+import { buildRevealIx, readResultBit, createCommittedRandomness } from "../switchboard";
+import { config } from "../config";
 import { BetModel } from "../models/Bet";
 import { PlayerModel } from "../models/Player";
 
 export const betsRouter = Router();
 
 const ASSET_SOL = 1;
+
+function parseClientSeed(v: unknown): Buffer {
+  const hex = String(v ?? "");
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error("clientSeedHex must be 32 bytes of hex");
+  return Buffer.from(hex, "hex");
+}
+function parseAmount(v: unknown): bigint {
+  const a = BigInt(String(v)); // throws on non-integer
+  if (a <= 0n) throw new Error("amount must be positive");
+  return a;
+}
 
 function parsePlayer(v: unknown): PublicKey {
   return new PublicKey(String(v)); // throws on invalid
@@ -46,6 +62,72 @@ async function resolveResultBit(randomness: PublicKey): Promise<number | null> {
   }
   return null;
 }
+
+/**
+ * Prepare a flip: create + commit a Switchboard randomness account whose authority
+ * is the settle authority, build the matching place_bet(_sol) instruction, and
+ * return a transaction the settle authority + randomness keypair have already
+ * signed. The frontend adds the player's signature (fee payer + wager source) and
+ * submits, so create + commit + place_bet stay atomic in one slot — satisfying the
+ * program's MAX_RANDOMNESS_COMMIT_AGE_SLOTS window — while leaving the randomness
+ * authority with the backend so it alone can reveal at settle time.
+ *
+ * Server-built, so the settle authority only ever signs a create+commit+place_bet
+ * transaction it constructed (it is not a fund-moving signer here — it pays only the
+ * randomness account rent).
+ */
+betsRouter.post("/prepare", async (req, res) => {
+  try {
+    const { player, amount, choice, clientSeedHex, asset } = req.body ?? {};
+    let playerPk: PublicKey;
+    try {
+      playerPk = parsePlayer(player);
+    } catch {
+      return res.status(400).json({ error: "invalid player pubkey" });
+    }
+    const c = Number(choice);
+    if (c !== 0 && c !== 1) return res.status(400).json({ error: "choice must be 0 (heads) or 1 (tails)" });
+    const isSol = asset === "sol";
+    if (asset !== "sol" && asset !== "token") return res.status(400).json({ error: "asset must be 'sol' or 'token'" });
+    let amt: bigint;
+    let clientSeed: Buffer;
+    try {
+      amt = parseAmount(amount);
+      clientSeed = parseClientSeed(clientSeedHex);
+    } catch (e: any) {
+      return res.status(400).json({ error: e?.message ?? "invalid request" });
+    }
+
+    const nonce = await fetchPlayerNonce(playerPk);
+    const rnd = await createCommittedRandomness();
+    const placeIx = isSol
+      ? buildPlaceBetSolIx(playerPk, amt, c, clientSeed, nonce, rnd.keypair.publicKey)
+      : buildPlaceBetIx(playerPk, amt, c, clientSeed, nonce, rnd.keypair.publicKey);
+
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+    const tx = new Transaction();
+    tx.feePayer = playerPk;
+    tx.recentBlockhash = blockhash;
+    tx.add(rnd.createIx, rnd.commitIx, placeIx);
+    // Sign the settle authority (randomness authority + create payer + commit
+    // authority) and the ephemeral randomness keypair (new account). The player's
+    // signature slot stays empty for the wallet to fill.
+    tx.partialSign(config.settleAuthority, rnd.keypair);
+
+    res.json({
+      transaction: tx.serialize({ requireAllSignatures: false }).toString("base64"),
+      randomnessAccount: rnd.keypair.publicKey.toBase58(),
+      nonce: Number(nonce),
+      blockhash,
+      lastValidBlockHeight,
+    });
+  } catch (e: any) {
+    const logs = errLogs(e);
+    console.error("[prepare] failed:", e?.message ?? e);
+    if (logs?.length) console.error("[prepare] logs:\n" + logs.join("\n"));
+    res.status(500).json({ error: e?.message ?? "prepare failed", logs });
+  }
+});
 
 /**
  * Settle a bet that the player already placed on-chain.

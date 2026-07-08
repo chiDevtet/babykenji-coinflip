@@ -1,10 +1,36 @@
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import * as sb from "@switchboard-xyz/on-demand";
 import { connection } from "./solana";
 import { config } from "./config";
 
 export const SWITCHBOARD_QUEUE = config.switchboardQueue;
 export const SWITCHBOARD_PROGRAM_ID = config.switchboardProgramId;
+
+export interface PreparedRandomness {
+  keypair: Keypair;
+  createIx: TransactionInstruction;
+  commitIx: TransactionInstruction;
+}
+
+/**
+ * Create + commit a Switchboard randomness account whose AUTHORITY is the settle
+ * authority (the provider wallet). This is what lets the backend crank reveal it
+ * later: the on-demand reveal instruction requires the randomness authority to
+ * sign, and only the settle authority signs the settle transaction. The player
+ * still commits atomically with place_bet (the settle authority co-signs that tx),
+ * so the program's MAX_RANDOMNESS_COMMIT_AGE_SLOTS window is satisfied.
+ */
+export async function createCommittedRandomness(): Promise<PreparedRandomness> {
+  const sbProgram = await loadSbProgram();
+  const keypair = Keypair.generate();
+  const authority = config.settleAuthority.publicKey;
+  // Randomness.create sets the account authority to the provider publicKey (the
+  // settle authority). Pass the authority to commitIx so it doesn't try to fetch
+  // the not-yet-created account to discover it.
+  const [randomness, createIx] = await sb.Randomness.create(sbProgram, keypair, config.switchboardQueue);
+  const commitIx = await randomness.commitIx(config.switchboardQueue, authority);
+  return { keypair, createIx, commitIx };
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
