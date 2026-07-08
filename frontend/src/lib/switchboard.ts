@@ -19,10 +19,21 @@ export interface SwitchboardRandomnessHandle {
 
 export async function createCommittedRandomness(connection: Connection, payer: PublicKey): Promise<SwitchboardRandomnessHandle> {
   const provider = { connection, publicKey: payer } as any;
-  const sbProgram = await sb.AnchorUtils.loadProgramFromConnection(connection , provider);
+  const sbProgram = await sb.AnchorUtils.loadProgramFromConnection(connection, provider);
   const keypair = Keypair.generate();
+  // `Randomness.create` builds the init instruction only — the account is NOT on
+  // chain until the transaction that carries `createIx` is sent and confirmed.
   const [randomness, createIx] = await sb.Randomness.create(sbProgram, keypair, SWITCHBOARD_QUEUE);
-  const commitIx = await randomness.commitIx(SWITCHBOARD_QUEUE);
+  // CRITICAL: pass the authority explicitly. Without it, `commitIx` falls back to
+  // `randomness.loadData()` (an Anchor `.fetch()` of the randomness account) to
+  // discover the authority — but that account does not exist yet, so the fetch
+  // throws "Account does not exist or has no data <randomness pubkey>" BEFORE the
+  // wallet is ever asked to sign. `Randomness.create` sets the account authority
+  // to the payer, so `payer` is exactly the authority the commit needs. Supplying
+  // it here keeps `commitIx` from reading the not-yet-created account, so the
+  // create+commit+place_bet transaction is handed to the wallet adapter for
+  // signing. (commitIx still reads the queue/oracle, both of which already exist.)
+  const commitIx = await randomness.commitIx(SWITCHBOARD_QUEUE, payer);
   return { keypair, randomness, createIx, commitIx };
 }
 

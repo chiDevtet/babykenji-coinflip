@@ -12,6 +12,16 @@ async function main() {
   const seed = await ensureActiveSeed();
 
   const app = express();
+
+  // The app runs behind the forgepad.fun reverse proxy, which sets
+  // X-Forwarded-For. express-rate-limit refuses to key on that header unless we
+  // opt in, otherwise it aborts every /api request with
+  // ERR_ERL_UNEXPECTED_X_FORWARDED_FOR. Trust exactly one proxy hop so the
+  // client IP is derived from the last entry in X-Forwarded-For (the proxy's
+  // recorded client), not spoofable by the caller. Must be set before the
+  // rate limiter is registered.
+  app.set("trust proxy", 1);
+
   app.use(express.json({ limit: "16kb" }));
   app.use(
     cors({
