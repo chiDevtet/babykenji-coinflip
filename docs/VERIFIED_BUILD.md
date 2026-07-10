@@ -114,18 +114,34 @@ For this repo those came in via:
 - `tempfile 3.27` (build-dep of `switchboard` via `prost-build`) → `getrandom 0.4`
 - `indexmap 2.14` / `hashbrown 0.17`, `zeroize 1.9` / `zeroize_derive 1.5`
 
-Fix: pin those transitive crates back to their last pre-edition2024 versions in
-the lock (this does **not** touch `solana-program`, Anchor, or your program
-source, and `proc-macro-crate`/`prost-build` deps are compile-time only):
+The same toolchain also rejects crates whose declared MSRV (`rust-version`) is
+≥ 1.85 — the error looks like `rustc 1.84.1-dev is not supported by the
+following package: unicode-segmentation@1.13.3 requires rustc 1.85.0`. In this
+repo that was `unicode-segmentation 1.13.3` and `uuid 1.23.4`.
+
+Fix: pin those transitive crates back to their last cargo-1.84-compatible
+versions in the lock (this does **not** touch `solana-program`, Anchor, or your
+program source, and `proc-macro-crate`/`prost-build` deps are compile-time only):
 
 ```bash
 cd program
-cargo update -p proc-macro-crate@3.5.0 --precise 3.3.0
-cargo update -p blake3@1.8.5          --precise 1.5.5
-cargo update -p tempfile              --precise 3.14.0
-cargo update -p indexmap@2.14.0       --precise 2.7.1
-cargo update -p zeroize@1.9.0         --precise 1.8.1
-cargo update -p zeroize_derive@1.5.0  --precise 1.4.2
+cargo update -p proc-macro-crate@3.5.0       --precise 3.3.0
+cargo update -p blake3@1.8.5                 --precise 1.5.5
+cargo update -p tempfile                     --precise 3.14.0
+cargo update -p indexmap@2.14.0              --precise 2.7.1
+cargo update -p zeroize@1.9.0                --precise 1.8.1
+cargo update -p zeroize_derive@1.5.0         --precise 1.4.2
+cargo update -p unicode-segmentation@1.13.3  --precise 1.12.0
+cargo update -p uuid@1.23.4                  --precise 1.12.1
+```
+
+To find every offender in one pass instead of one-per-build:
+
+```bash
+cd program && cargo metadata --locked --format-version 1 | node -e '
+let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{for(const p of JSON.parse(d).packages){
+const [ma,mi]=(p.rust_version||"0.0").split(".").map(Number);
+if(p.edition==="2024"||ma>1||(ma===1&&mi>=85))console.log(p.name,p.version,p.rust_version||"edition2024");}});'
 ```
 
 Commit the updated `Cargo.lock`, and **always build/verify with the committed
@@ -133,14 +149,14 @@ lock** so it can't re-drift (`solana-verify` uses it as-is; for local `cargo`
 add `--locked`, and add `--locked` to the CI `cargo`/`anchor` steps). Re-run the
 build; it now compiles on cargo 1.84.
 
-> Important — does the pinned lock match your deployed bytecode? Only if the
-> deployed program was built with this same toolchain (Anchor 0.31.1 + Solana
-> 2.3.x, cargo 1.84). If it was built with a **newer** platform-tools (cargo
-> ≥1.85, which *can* compile the edition2024 crates), the pinned build will
-> compile but its hash will differ from on-chain. In that case either build with
-> the matching newer toolchain (`solana-verify build --solana-version <X.Y.Z>`)
-> or do a **verifiable redeploy** (build reproducibly now, deploy that exact
-> artifact, then verify — guarantees on-chain == repo).
+> Important — for THIS program the pinned lock does **not** reproduce the
+> currently deployed bytecode. The lock committed at deploy time already
+> required rustc ≥ 1.85 (a modern host cargo resolved it), while the deploy
+> box runs Solana 2.1.0 — so the live binary was built by an unidentified
+> newer toolchain that is no longer reproducible from the repo. The canonical
+> way out is the **verifiable redeploy** in §7: build reproducibly with the
+> default pinned image, deploy that exact artifact, then verify. After the
+> redeploy, on-chain == repo by construction.
 
 ## 4. Verify from the public repo (Part A step 4)
 
@@ -271,6 +287,71 @@ Publish alongside the deploy (not committed to the repo):
 - The **commit hash** that was deployed (record it in your release notes /
   `docs/DEPLOY_ONCHAIN.md`; it is `a0ca9a34…` for the current build).
 - The **IDL** on-chain (`anchor idl init`, step 5).
+
+## 7. Verifiable redeploy — the canonical path for this program
+
+Use this when the deployed bytecode cannot be reproduced from the repo (our
+case: the deploy-era toolchain is unknown and the lock had drifted). It makes
+on-chain == repo **by construction**: build reproducibly, deploy exactly that
+artifact, verify at the same commit.
+
+Prerequisites: the **upgrade-authority keypair**, and ~1–2 SOL on the fee payer
+(the deploy buffer rent is refunded when the upgrade completes; net cost ≈ tx
+fees, plus rent only if the program account must be extended).
+
+```bash
+# 0. Land the buildable lock on the default branch first (merge the PR), then:
+cd <repo-root> && git fetch origin && git checkout <default-branch> && git pull
+COMMIT=$(git rev-parse HEAD)   # the commit you will build, deploy, and verify
+
+# 1. Reproducible build + local hash
+cd program
+solana-verify build --library-name forge_coinflip -- --features mainnet
+solana-verify get-executable-hash target/deploy/forge_coinflip.so   # note HASH
+
+# 2. (Recommended) pause the game via update_config { paused: true } — in-flight
+#    bets stay safe: source is unchanged, layouts identical, no migration; the
+#    10-minute expiry refund covers any settlement gap.
+
+# 3. Upgrade the program with the artifact you just built
+solana program deploy \
+  -u https://api.mainnet-beta.solana.com \
+  --program-id DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj \
+  --upgrade-authority /path/to/upgrade-authority.json \
+  target/deploy/forge_coinflip.so
+# If it fails with "account data too small": the new binary is larger than the
+# allocated programdata — extend, then retry the deploy:
+#   solana program extend DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj <EXTRA_BYTES> \
+#     -u https://api.mainnet-beta.solana.com
+
+# 4. Confirm on-chain now equals the local artifact (must print HASH)
+solana-verify get-program-hash -u https://api.mainnet-beta.solana.com \
+  DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj
+
+# 5. Unpause, run a smoke flip.
+
+# 6. Upload the verification PDA + queue the OtterSec remote job (see §5)
+cd ..
+solana-verify verify-from-repo -u https://api.mainnet-beta.solana.com \
+  --program-id DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj \
+  --keypair /path/to/upgrade-authority.json \
+  https://github.com/chiDevtet/babylenji-coinflip \
+  --commit-hash $COMMIT \
+  --library-name forge_coinflip --mount-path program \
+  -- --features mainnet
+solana-verify remote submit-job \
+  --program-id DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj \
+  --uploader <UPGRADE_AUTHORITY_PUBKEY>
+```
+
+Afterwards check `verify.osec.io/status/DFmU9mwDbHkGRZ5J2f9zi59ZyDapaEv8qHhKsx8KpwAj`
+and the Verified badge on Solana Explorer / Solscan, publish the IDL (§5), and
+record `$COMMIT` as the verified deploy commit.
+
+**Keep it verifiable:** `program/Cargo.lock` is now release-critical. Never let
+a stray `cargo update`/modern `cargo check` rewrite it — build with `--locked`,
+and re-run the one-pass MSRV/edition scan (§3) before any future deploy. Any
+future upgrade must repeat §7 steps 1→6 at its new commit.
 
 ## References
 - Solana docs — Verified Builds: https://solana.com/docs/programs/verified-builds
