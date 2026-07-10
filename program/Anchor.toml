@@ -1,5 +1,8 @@
+# Must match anchor-lang/anchor-spl 0.31.1 (Cargo.toml), TOOLCHAIN.md, and CI.
+# The avm shim execs whatever version is pinned here — a mismatched pin runs a
+# different CLI than the one the repo is built against.
 [toolchain]
-anchor_version = "1.0.2"
+anchor_version = "0.31.1"
 
 [features]
 resolution = true
