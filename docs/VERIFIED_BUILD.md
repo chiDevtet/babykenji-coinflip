@@ -92,6 +92,56 @@ In rough order of likelihood:
 6. **`overflow-checks`/`lto`/`codegen-units`** differ. This repo sets them in
    `program/Cargo.toml [profile.release]`; don't change them without redeploying.
 
+### If the build fails with `feature edition2024 is required`
+
+Symptom (inside the Docker build):
+
+```
+error: failed to parse manifest at `.../toml_datetime-1.1.1+spec-1.1.0/Cargo.toml`
+  feature `edition2024` is required ... not stabilized in this version of Cargo (1.84.0)
+```
+
+Cause: the Solana 2.3.0 verifiable-build image runs `cargo build-sbf` with
+**platform-tools cargo 1.84** (the container's *host* Rust is newer, but the SBF
+build uses the bundled one), which predates edition2024. If the committed
+`Cargo.lock` was last written by a modern host `cargo` (e.g. a local
+`cargo build`/`cargo check`, or CI without `--locked`), it resolves transitive
+crates up to their newest **edition2024** releases, which cargo 1.84 can't parse.
+For this repo those came in via:
+
+- `proc-macro-crate 3.5.0` → `toml_edit 0.25` / `toml_datetime 1.1` / `winnow 1.0`
+- `blake3 1.8` (under `solana-program`) → `digest 0.11` / `crypto-common 0.2` / `block-buffer 0.12`
+- `tempfile 3.27` (build-dep of `switchboard` via `prost-build`) → `getrandom 0.4`
+- `indexmap 2.14` / `hashbrown 0.17`, `zeroize 1.9` / `zeroize_derive 1.5`
+
+Fix: pin those transitive crates back to their last pre-edition2024 versions in
+the lock (this does **not** touch `solana-program`, Anchor, or your program
+source, and `proc-macro-crate`/`prost-build` deps are compile-time only):
+
+```bash
+cd program
+cargo update -p proc-macro-crate@3.5.0 --precise 3.3.0
+cargo update -p blake3@1.8.5          --precise 1.5.5
+cargo update -p tempfile              --precise 3.14.0
+cargo update -p indexmap@2.14.0       --precise 2.7.1
+cargo update -p zeroize@1.9.0         --precise 1.8.1
+cargo update -p zeroize_derive@1.5.0  --precise 1.4.2
+```
+
+Commit the updated `Cargo.lock`, and **always build/verify with the committed
+lock** so it can't re-drift (`solana-verify` uses it as-is; for local `cargo`
+add `--locked`, and add `--locked` to the CI `cargo`/`anchor` steps). Re-run the
+build; it now compiles on cargo 1.84.
+
+> Important — does the pinned lock match your deployed bytecode? Only if the
+> deployed program was built with this same toolchain (Anchor 0.31.1 + Solana
+> 2.3.x, cargo 1.84). If it was built with a **newer** platform-tools (cargo
+> ≥1.85, which *can* compile the edition2024 crates), the pinned build will
+> compile but its hash will differ from on-chain. In that case either build with
+> the matching newer toolchain (`solana-verify build --solana-version <X.Y.Z>`)
+> or do a **verifiable redeploy** (build reproducibly now, deploy that exact
+> artifact, then verify — guarantees on-chain == repo).
+
 ## 4. Verify from the public repo (Part A step 4)
 
 This clones your repo at the given commit, rebuilds in Docker, and checks the
