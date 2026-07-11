@@ -109,6 +109,25 @@ function safeGetLogs(e: any): string[] | undefined {
   }
 }
 
+// A rejected wallet prompt is the user changing their mind, not a failure — it
+// must reset the flip UI quietly instead of surfacing through the red error
+// path. Adapters disagree on the shape (WalletSignTransactionError /
+// WalletSendTransactionError wrapping "User rejected the request", EIP-1193
+// style code 4001, or only a message), so match all of them.
+export function isUserRejection(e: any): boolean {
+  const code = e?.code ?? e?.error?.code ?? e?.cause?.code;
+  if (code === 4001) return true;
+  if (e?.name === "WalletSignTransactionError") return true;
+  const msg = [e?.message, e?.error?.message, e?.cause?.message].filter(Boolean).join(" ");
+  return /user rejected|rejected the request|user denied|user cancell?ed|approval denied/i.test(msg);
+}
+
+// Marker error for a cancelled wallet prompt, so realFlip's catch can tell
+// "user backed out" (quiet muted notice) from a real failure (red error UI).
+function flipCancelledError(): Error {
+  return Object.assign(new Error("Flip cancelled — nothing was sent."), { flipCancelled: true });
+}
+
 // Per-asset stand-ins used in preview/demo so the UI is fully interactive without
 // a deployed program. Both $BABYK and SOL use 9 decimals (matching the real mint).
 type AssetParams = { symbol: string; decimals: number; balance: bigint; cfg: ConfigView };
@@ -175,6 +194,9 @@ export default function App() {
   const [clientSeed, setClientSeed] = useState<Uint8Array>(() => randomSeed());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Subtle status line (grey, non-error) — used when the user cancels the
+  // wallet prompt. Mutually exclusive with `error`.
+  const [notice, setNotice] = useState<string | null>(null);
   const [coinResult, setCoinResult] = useState<"heads" | "tails" | null>(null);
   const [spinning, setSpinning] = useState(false);
   const [lastResult, setLastResult] = useState<{ won: boolean; label: string; payout: string } | null>(null);
@@ -292,6 +314,7 @@ export default function App() {
     async (amountBase: bigint, choice: number) => {
       setBusy(true);
       setError(null);
+      setNotice(null);
       setLastResult(null);
       setCoinResult(null);
       setSpinning(true);
@@ -335,6 +358,7 @@ export default function App() {
       if (!publicKey) return;
       setBusy(true);
       setError(null);
+      setNotice(null);
       setLastResult(null);
       setCoinResult(null);
       setSpinning(true);
@@ -365,6 +389,9 @@ export default function App() {
           // Wallet adds the player's signature, preserving the backend's partial sigs.
           sig = await sendTransaction(tx, connection);
         } catch (sendErr) {
+          // User backed out of the wallet prompt: not an error, don't log scary
+          // program-log dumps — just reset quietly via the marker error below.
+          if (isUserRejection(sendErr)) throw flipCancelledError();
           throw new Error(describeSendError(sendErr));
         }
         await connection.confirmTransaction(
@@ -398,10 +425,17 @@ export default function App() {
           } catch {}
         }
       } catch (e: any) {
-        setSpinning(false);
         setCoinResult(null);
-        setError(e.message || "transaction failed");
+        if (e?.flipCancelled) {
+          // Cancelled at the wallet prompt — subtle grey notice, not an error.
+          setNotice(e.message);
+        } else {
+          setError(e.message || "transaction failed");
+        }
       } finally {
+        // Every exit path — success, cancel, or failure — must stop the coin and
+        // re-enable the FLIP button. Nothing may leave `spinning`/`busy` stuck.
+        setSpinning(false);
         setBusy(false);
       }
     },
@@ -446,6 +480,7 @@ export default function App() {
           paused={effectiveCfg?.paused ?? false}
           busy={busy}
           error={error}
+          notice={notice}
           lastResult={lastResult}
           onFlip={onFlip}
         />

@@ -15,6 +15,8 @@ interface Props {
   paused: boolean;
   busy: boolean;
   error: string | null;
+  /** Subtle non-error status (e.g. "Flip cancelled") shown in grey, not red. */
+  notice: string | null;
   lastResult: { won: boolean; label: string; payout: string } | null;
   onFlip: (amountBaseUnits: bigint, choice: number) => void;
 }
@@ -51,6 +53,7 @@ export default function BetPanel({
   paused,
   busy,
   error,
+  notice,
   lastResult,
   onFlip,
 }: Props) {
@@ -145,6 +148,7 @@ export default function BetPanel({
         {tooBig && <span className="warn">Above maximum bet.</span>}
         {insufficient && <span className="warn">Insufficient balance.</span>}
         {error && <span className="warn">{error}</span>}
+        {notice && !busy && <span className="muted">{notice}</span>}
         {lastResult && !busy && (
           <span className={lastResult.won ? "win" : "lose"}>
             {lastResult.won ? `You won! +${lastResult.payout} ${symbol}` : "You lost."} ({lastResult.label})

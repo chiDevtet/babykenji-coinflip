@@ -29,7 +29,13 @@ export default function CoinFlip({ result, spinning }: Props) {
       const faceOffset = result === "tails" ? 180 : 0;
       setDeg(turns.current * 360 + faceOffset);
       setPhase("landing");
+      return;
     }
+    // Spin ended with NO result — wallet cancel, failed send/confirm, or a
+    // settle error. Return to rest; without this branch the phase stayed
+    // "spinning" and the is-spinning class (an infinite CSS animation) kept the
+    // coin whirling until a page refresh.
+    setPhase("idle");
   }, [spinning, result]);
 
   return (
