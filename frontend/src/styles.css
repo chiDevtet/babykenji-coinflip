@@ -55,6 +55,20 @@ body {
 }
 .chip.subtle { background: rgba(255, 255, 255, 0.6); color: var(--blue-900); }
 
+/* Game-audio mute toggle — a round chip-style icon button. Deliberately NOT
+   class "chip": the mobile wallet-bar layout keys on :has(.chip) to detect the
+   connected state, and the mute button is present even when disconnected. */
+.mute-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; padding: 0; border: none; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92); color: var(--blue-700);
+  box-shadow: var(--card-shadow); cursor: pointer;
+  transition: transform 0.12s ease, background 0.15s ease, color 0.15s ease;
+}
+.mute-btn:hover { transform: translateY(-1px); }
+.mute-btn.is-muted { background: rgba(255, 255, 255, 0.6); color: #6b7d97; }
+.mute-btn svg { display: block; }
+
 /* wallet-adapter button override */
 .wallet-adapter-button-trigger {
   background: var(--ink) !important; border-radius: 999px !important;

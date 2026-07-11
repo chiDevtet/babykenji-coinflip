@@ -7,6 +7,7 @@ import { TOKEN_MINT, CONFIGURED, type Asset } from "./lib/constants";
 import { fetchConfigView, fetchPlayerNonce, fetchVaultBalances, type ConfigView } from "./lib/anchorIx";
 import { computeMaxWager, isHouseFunded } from "./lib/wager";
 import { getCommitment, preparePlaceBet, settleBet, type Commitment } from "./lib/api";
+import { useGameAudio } from "./lib/audio";
 import WalletBar from "./components/WalletBar";
 import CoinFlip from "./components/CoinFlip";
 import BetPanel from "./components/BetPanel";
@@ -203,6 +204,24 @@ export default function App() {
 
   // The user's own simulated flips, prepended into the Live Flips feed in demo mode.
   const [ownFlips, setOwnFlips] = useState<FeedFlip[]>([]);
+
+  // Game audio: looping bg music (starts on first user gesture), a flip loop
+  // tied to `spinning`, win/lose stingers, and a persisted mute toggle.
+  const { muted, toggleMuted, startFlipLoop, stopFlipLoop, playResult } = useGameAudio();
+
+  // The flip loop mirrors the coin exactly. `spinning` is reset in realFlip's
+  // finally on EVERY exit path (success, wallet cancel, any error), so the loop
+  // can never keep playing after the coin stops.
+  useEffect(() => {
+    if (spinning) startFlipLoop();
+    else stopFlipLoop();
+  }, [spinning, startFlipLoop, stopFlipLoop]);
+
+  // Win/lose plays once at the moment the outcome is shown (real + demo flips).
+  // playResult also force-stops the flip loop, so the stinger never overlaps it.
+  useEffect(() => {
+    if (lastResult) playResult(lastResult.won);
+  }, [lastResult, playResult]);
 
   // SOL is a live wager path once the program is deployed (the on-chain config
   // creates the SOL vault at init). Selectable in demo for UI work too.
@@ -454,6 +473,8 @@ export default function App() {
         assetBalance={effectiveConnected ? fmtBase(effectiveBalance, effectiveDecimals) : null}
         assetSymbol={currentSymbol}
         solBalance={solBalance}
+        muted={muted}
+        onToggleMute={toggleMuted}
       />
 
       <main className="stage">
