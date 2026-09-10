@@ -9,8 +9,8 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import {
+  createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
-  getOrCreateAssociatedTokenAccount,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 
@@ -247,6 +247,56 @@ async function send(admin, label, ix) {
   console.log(`${label}: ${sig}`);
 }
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function ensureAssociatedTokenAccount(admin, owner, label) {
+  const address = getAssociatedTokenAddressSync(TOKEN_MINT, owner);
+  const verify = async () => {
+    const info = await connection.getAccountInfo(address, "confirmed");
+    if (!info) return false;
+    if (!info.owner.equals(TOKEN_PROGRAM_ID) || info.data.length < 64) {
+      throw new Error(`${label} ATA ${address.toBase58()} exists but is not a valid SPL token account`);
+    }
+    const mint = new PublicKey(info.data.subarray(0, 32));
+    const tokenOwner = new PublicKey(info.data.subarray(32, 64));
+    if (!mint.equals(TOKEN_MINT) || !tokenOwner.equals(owner)) {
+      throw new Error(`${label} ATA ${address.toBase58()} has the wrong mint or owner`);
+    }
+    return true;
+  };
+
+  if (!(await verify())) {
+    let createError;
+    try {
+      await send(
+        admin,
+        `created ${label} BABYK ATA`,
+        createAssociatedTokenAccountIdempotentInstruction(
+          admin.publicKey,
+          address,
+          owner,
+          TOKEN_MINT,
+        ),
+      );
+    } catch (err) {
+      // A confirmation/read race can report failure even after the ATA landed.
+      // Poll the exact account before deciding the creation really failed.
+      createError = err;
+      console.warn(`${label} ATA creation did not confirm cleanly; checking on-chain state...`);
+    }
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (await verify()) break;
+      await wait(1_000);
+    }
+    if (!(await verify())) {
+      throw new Error(`${label} ATA ${address.toBase58()} was not created`, { cause: createError });
+    }
+  }
+
+  console.log(`${label} BABYK ATA ready: ${owner.toBase58()} -> ${address.toBase58()}`);
+  return address;
+}
+
 async function simulate(admin, ix) {
   const tx = new Transaction().add(ix);
   tx.feePayer = admin.publicKey;
@@ -325,8 +375,7 @@ async function main() {
     if (bet.asset === 0) tokenPlayers.set(bet.player.toBase58(), bet.player);
   }
   for (const player of tokenPlayers.values()) {
-    const ata = await getOrCreateAssociatedTokenAccount(connection, admin, TOKEN_MINT, player, false, "confirmed");
-    console.log(`player BABYK ATA ready: ${player.toBase58()} -> ${ata.address.toBase58()}`);
+    await ensureAssociatedTokenAccount(admin, player, "player");
   }
 
   for (const bet of openBets) {
@@ -359,10 +408,9 @@ async function main() {
   const withdrawSol = solLamports - solRent;
   if (withdrawSol > 0n) await send(admin, `withdrew ${Number(withdrawSol) / 1e9} SOL`, withdrawSolIx(admin.publicKey, cfg, withdrawSol));
 
-  const adminAta = await getOrCreateAssociatedTokenAccount(connection, admin, TOKEN_MINT, admin.publicKey, false, "confirmed");
-  console.log(`admin BABYK ATA: ${adminAta.address.toBase58()}`);
+  const adminAta = await ensureAssociatedTokenAccount(admin, admin.publicKey, "admin");
   const tokenRaw = BigInt((await connection.getTokenAccountBalance(cfg.treasuryVault, "confirmed")).value.amount);
-  if (tokenRaw > 0n) await send(admin, `withdrew ${Number(tokenRaw) / 1e9} BABYK`, withdrawTokenIx(admin.publicKey, cfg, adminAta.address, tokenRaw));
+  if (tokenRaw > 0n) await send(admin, `withdrew ${Number(tokenRaw) / 1e9} BABYK`, withdrawTokenIx(admin.publicKey, cfg, adminAta, tokenRaw));
 
   cfg = await fetchConfig();
   const finalToken = await connection.getTokenAccountBalance(cfg.treasuryVault, "confirmed");
